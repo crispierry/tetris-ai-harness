@@ -1,4 +1,52 @@
-// Deliberate fail-closed placeholder. The actual architect/source worker must
-// implement independent functional checks from the frozen product criteria.
-// A healthy neutral scaffold must never become accepted game evidence.
-throw Error('Game functional verifier is not implemented; no product acceptance');
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { localUrl } from './scaffold.mjs';
+import { createGame, start, move, rotate, softDrop, hardDrop, tick, togglePause, cells } from './public/engine.mjs';
+
+const [url, head, base, tree, operation_id] = process.argv.slice(2);
+localUrl(url);
+const get = async relative => {
+  const response = await fetch(new URL(relative, url), {redirect:'error', signal:AbortSignal.timeout(3000)});
+  assert.equal(response.status, 200, `served ${relative}`);
+  return response;
+};
+const identity = await (await get('identity')).json();
+assert.deepEqual({url:identity.url,head:identity.head,base:identity.base,tree:identity.tree,operation_id:identity.operation_id}, {url,head,base,tree,operation_id});
+assert.ok(Number.isSafeInteger(identity.pid) && identity.pid > 1);
+const assets = [];
+for (const file of ['index.html','styles.css','app.mjs','engine.mjs']) {
+  const actual = Buffer.from(await (await get(file)).arrayBuffer());
+  const expected = await readFile(new URL(`./public/${file}`, import.meta.url));
+  assert.ok(actual.equals(expected), `${file} must equal the checked candidate`);
+  assets.push({file, sha256:createHash('sha256').update(actual).digest('hex')});
+}
+const appSource = await readFile(new URL('./public/app.mjs', import.meta.url), 'utf8');
+assert.match(appSource, /from\s+['"]\.\/engine\.mjs['"]/u, 'UI imports the actual engine');
+const htmlSource = await readFile(new URL('./public/index.html', import.meta.url), 'utf8');
+assert.match(htmlSource, /type=['"]module['"][^>]*src=['"][^'"]*app\.mjs['"]/u, 'HTML runs the actual module');
+let ready = createGame(12345);
+assert.equal(ready.status, 'ready');
+assert.equal(ready.board.length, 20);
+assert.ok(ready.board.every(row => row.length === 10 && row.every(value => value === null)));
+let playing = start(ready);
+assert.equal(playing.status, 'playing');
+assert.equal(cells(playing.active).length, 4);
+const moved = move(playing, -1);
+assert.equal(moved.active.x, playing.active.x - 1);
+assert.equal(playing.active.x, start(createGame(12345)).active.x, 'input state unchanged');
+assert.equal(cells(rotate(playing).active).length, 4);
+assert.equal(softDrop(playing).active.y, playing.active.y + 1);
+const paused = togglePause(playing);
+assert.equal(paused.status, 'paused');
+assert.deepEqual(tick(paused, 10000), paused, 'pause freezes gravity');
+assert.equal(togglePause(paused).status, 'playing');
+const dropped = hardDrop(playing);
+assert.equal(dropped.board.flat().filter(Boolean).length, 4, 'hard drop locks actual cells');
+let ended = playing;
+for (let count = 0; count < 100 && ended.status === 'playing'; count++) ended = hardDrop(ended);
+assert.equal(ended.status, 'over', 'real repeated placements reach top-out');
+const reset = start(createGame(12345));
+assert.equal(reset.score, 0); assert.equal(reset.lines, 0); assert.equal(reset.level, 1);
+assert.ok(reset.board.flat().every(value => value === null));
+console.log(JSON.stringify({kind:'game-functional',passed:true,observed_at:new Date().toISOString(),identity,assets,assertions:['exact serving identity','all served candidate assets','ready board','four-cell inventory','movement','rotation','soft drop','hard-drop locking','pause/resume','natural top-out','fresh restart'],browser_input_verified:false,note:'Deterministic engine and served-byte checks; native browser acceptance is separate.'}));
