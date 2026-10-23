@@ -1,2 +1,65 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Local browser app scaffold</title><link rel="stylesheet" href="/styles.css"></head><body><main><h1>Local browser app scaffold</h1><p>The requested application has not been implemented.</p></main></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Tetris · Local arcade</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="page-header">
+      <div><p class="eyebrow" data-copy="eyebrow"></p><h1 data-copy="title"></h1></div>
+      <p class="intro" data-copy="intro"></p>
+    </header>
+    <main class="game-layout" aria-labelledby="game-heading">
+      <section class="play-card" aria-labelledby="game-heading">
+        <div class="board-header">
+          <h2 id="game-heading" data-copy="playfield"></h2>
+          <span id="status" class="status" data-testid="status">Loading…</span>
+        </div>
+        <div id="game" class="game-surface" tabindex="0" role="region" aria-label="Tetris game"
+          aria-describedby="board-description focus-help controls-description">
+          <div id="board" class="board" role="img" aria-label="Game board"></div>
+          <div id="board-overlay" class="board-overlay" aria-hidden="true">
+            <span id="overlay-title"></span><span id="overlay-detail"></span>
+          </div>
+        </div>
+        <p id="board-description" class="sr-only"></p>
+        <div class="actions">
+          <button id="start" class="button button-primary" type="button" data-copy="start"></button>
+          <button id="pause" class="button button-primary" type="button" hidden></button>
+          <button id="new-game" class="button button-secondary" type="button" data-copy="newGame" hidden></button>
+        </div>
+        <p id="focus-help" class="focus-help" data-copy="focusHelp"></p>
+      </section>
+      <section class="stats-card card" aria-label="Game progress">
+        <dl class="stats">
+          <div><dt data-copy="score"></dt><dd id="score" data-testid="score">0</dd></div>
+          <div><dt data-copy="lines"></dt><dd id="lines" data-testid="lines">0</dd></div>
+          <div><dt data-copy="level"></dt><dd id="level" data-testid="level">1</dd></div>
+        </dl>
+      </section>
+      <section class="next-card card" aria-labelledby="next-heading">
+        <div><h2 id="next-heading" data-copy="next"></h2><p id="next-description" class="muted"></p></div>
+        <div id="next-piece" class="next-piece" aria-hidden="true"></div>
+      </section>
+      <section class="help-card card" aria-labelledby="controls-heading">
+        <h2 id="controls-heading" data-copy="controls"></h2>
+        <dl id="controls-description" class="controls-list">
+          <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd data-copy="move"></dd></div>
+          <div><dt><kbd>↓</kbd></dt><dd data-copy="softDrop"></dd></div>
+          <div><dt><kbd>↑</kbd> <span data-copy="or"></span> <kbd>X</kbd></dt><dd data-copy="rotate"></dd></div>
+          <div><dt><kbd data-copy="space"></kbd></dt><dd data-copy="hardDrop"></dd></div>
+          <div><dt><kbd>P</kbd></dt><dd data-copy="pauseResume"></dd></div>
+        </dl>
+        <p class="help-note" data-copy="helpNote"></p>
+      </section>
+    </main>
+    <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+    <noscript>This game needs JavaScript enabled to play.</noscript>
+  </div>
+</body>
+</html>
