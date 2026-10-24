@@ -46,3 +46,19 @@ test('local test error preserves human play and exposes usable stop/reset withou
   key(f.$('v-human-game'),' ');assert.equal(f.$('v-0-pieces').textContent,'1');assert.equal(f.$('v-1-pieces').textContent,'0');assert.equal(f.$('v-reset').disabled,false);
   failing=false;await f.$('v-reset').trigger('click');await f.$('v-step').trigger('click');assert.equal(f.$('v-1-pieces').textContent,'1');assert.equal(f.$('v-1-error').hidden,true);m.dispose();
 });
+
+test('capacity exhaustion stops live play but retained replay can pause, advance one frame and resume',async()=>{
+  const f=fixture();let choices=0;const base=heuristic();
+  const m=mountVersus(f.doc,{window:f.win,runnerFactory:options=>new HumanVersus({...options,providerFactory:()=>({...base,async decide(p){choices++;return base.decide(p);}})})});
+  await f.$('v-start').trigger('click');
+  for(let n=0;n<5000&&!m.runner.view.archiveError;n++)m.runner.input(n%2?'left':'right');
+  assert(m.runner.view.archiveError);assert.equal(f.$('v-start').disabled,true);assert.equal(f.$('v-step').disabled,true);
+  const count=m.runner.view.frameCount,decisions=choices,retainedExport=m.runner.exportRun();
+  await f.$('v-replay').trigger('click');await f.$('v-pause').trigger('click');
+  assert.equal(f.$('v-start').disabled,false);assert.equal(f.$('v-step').disabled,false);assert.equal(f.$('v-step').textContent,'Next saved frame');
+  const replayBefore=m.runner.view.lanes;key(f.$('v-human-game'),' ');f.frame(10000);assert.deepEqual(m.runner.view.lanes,replayBefore);
+  const index=m.runner.view.replayIndex;await f.$('v-step').trigger('click');assert.equal(m.runner.view.replayIndex,index+1);
+  await f.$('v-start').trigger('click');assert.equal(m.runner.view.playback,true);assert.equal(m.runner.view.replayIndex,index+2);
+  await f.$('v-pause').trigger('click');assert.equal(m.runner.view.frameCount,count);assert.equal(choices,decisions);
+  assert.equal(m.runner.exportRun(),retainedExport);assert.equal(JSON.parse(m.runner.exportRun()).archiveIncomplete,true);m.dispose();
+});

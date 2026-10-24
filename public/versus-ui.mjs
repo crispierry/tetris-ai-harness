@@ -14,12 +14,12 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const tiles = [0, 1].map(i => Array.from({ length: 200 }, () => { const e = doc.createElement('span'); e.className = 'comparison-cell'; e.setAttribute('aria-hidden', 'true'); $(`v-${i}-board`).append(e); return e; }));
   let previousAnnouncement = '', lastFrame = null, frameHandle = null, disposed = false;
   function render(view) {
-    const replay = view.mode === 'replay', finished = view.state === 'completed';
-    $('v-start').disabled = finished || view.running || view.busy || view.playback || !!view.archiveError;
+    const replay = view.mode === 'replay', finished = view.state === 'completed', archiveBlocked = !replay && !!view.archiveError;
+    $('v-start').disabled = finished || view.running || view.busy || view.playback || archiveBlocked;
     text('v-start', replay ? 'Play saved frames' : view.state === 'ready' ? 'Start' : 'Resume');
     $('v-pause').disabled = !view.running && !view.busy && !view.playback;
     $('v-stop').disabled = view.state === 'ready' || view.state === 'stopped' || finished;
-    $('v-step').disabled = view.running || view.busy || view.playback || !!view.archiveError || (!replay && !!view.lanes[1].outcome);
+    $('v-step').disabled = view.running || view.busy || view.playback || archiveBlocked || (!replay && !!view.lanes[1].outcome);
     text('v-step', replay ? 'Next saved frame' : 'Step algorithm');
     $('v-replay').disabled = !view.frameCount; $('v-export').disabled = !view.frameCount;
     const progress = replay ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new choices`
