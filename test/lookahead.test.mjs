@@ -108,3 +108,22 @@ test('final report output overflow remains a classified failure after full root 
  const capped=await evaluateLookahead(packet,{timeMs:2000,maxOutputBytes:payloadBytes+48});
  assert.equal(capped.ok,false);assert.equal(capped.error.code,'budget');assert.equal(capped.selectedRootId,null);assert.equal(capped.complete,false);
 });
+test('all failure envelopes stay within output caps for invalid identities and large allowed policies',async()=>{
+ const {packet}=fixture({limit:4}),bytes=x=>new TextEncoder().encode(JSON.stringify(x)).length;
+ const huge=structuredClone(packet);huge.requestId='x'.repeat(200000);
+ const invalid=await evaluateLookahead(huge,{maxOutputBytes:4096});assert.equal(invalid.ok,false);assert.equal(invalid.error.code,'input');assert.equal(invalid.requestId,null);assert(bytes(invalid)<=4096);
+ const evaluator={...localLeafEvaluator(),policy:{...localLeafEvaluator().policy,formula:'f'.repeat(3000)}};
+ const oversized=await evaluateLookahead(packet,{evaluator,maxOutputBytes:4096});assert.equal(oversized.ok,false);assert.equal(oversized.error.code,'budget');assert(bytes(oversized)<=4096);assert(!JSON.stringify(oversized).includes('f'.repeat(100)));assert(!Object.hasOwn(oversized,'policy'));
+ const stopped=new AbortController();stopped.abort();
+ const cancelled=await evaluateLookahead(packet,{evaluator,maxOutputBytes:4096,signal:stopped.signal});assert.equal(cancelled.error.code,'cancelled');assert(bytes(cancelled)<=4096);
+ const throwing={...evaluator,evaluate(){throw new Error('raw-secret-sentinel'.repeat(10000));}};
+ const failure=await evaluateLookahead(packet,{evaluator:throwing,maxOutputBytes:4096});assert.equal(failure.error.code,'provider_error');assert(bytes(failure)<=4096);assert(!JSON.stringify(failure).includes('raw-secret-sentinel'));
+ for(const r of [invalid,oversized,cancelled,failure]){assert.equal(r.selectedRootId,null);assert.equal(r.value,null);assert.equal(r.complete,false);assert(!Object.hasOwn(r,'roots'));}
+});
+test('mutated caught search errors cannot smuggle unbounded reasons or inherited error codes',async()=>{
+ let error;try{createLookaheadProvider({depth:3});}catch(e){error=e;}
+ error.code='toString';error.reason='raw-secret-sentinel'.repeat(10000);
+ const evaluator={name:'Throwing bounded mock',kind:'mock',version:'failure-1',policy:testPolicy,evaluate(){throw error;}};
+ const report=await evaluateLookahead(fixture().packet,{evaluator,maxOutputBytes:4096});
+ assert.equal(report.error.code,'provider_error');assert.equal(report.error.reason,'leaf evaluator error');assert(new TextEncoder().encode(JSON.stringify(report)).length<=4096);assert(!JSON.stringify(report).includes('raw-secret-sentinel'));
+});

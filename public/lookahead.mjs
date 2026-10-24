@@ -5,8 +5,15 @@ import { BRIEF_VERSION } from './briefing.mjs';
 export const LOOKAHEAD_VERSION = 'visible-placement-search-1';
 const defaults = Object.freeze({ depth: 1, nodeCap: 4000, callCap: 4000, timeMs: 500, maxOutputBytes: 2097152, discount: .9 });
 const size = value => new TextEncoder().encode(JSON.stringify(value)).length;
+const failureReasons=freeze({configuration:['unsupported configuration','unsupported mock','unsupported evaluator','explicit bounded evaluator policy required','evaluator metadata too large','overlapping search'],
+  input:['private field','invalid public packet','invalid observation','duplicate root','root horizon or binding mismatch','insufficient known horizon','synthetic refill boundary','invalid public data'],
+  budget:['node budget','evaluator call budget','output budget','reachability budget'],timeout:['time budget'],cancelled:['cancelled'],schema:['invalid leaf value','missing reachable children','canonical child failure'],provider_error:['leaf evaluator error']});
 class SearchFailure extends Error {
-  constructor(code, reason) { super(`Bounded search stopped: ${reason}. No placement selected.`); this.code=code;this.reason=reason; }
+  constructor(code, reason) {
+    const valid=typeof code==='string'&&Object.hasOwn(failureReasons,code)&&typeof reason==='string'&&failureReasons[code].includes(reason);
+    if(!valid){code='provider_error';reason='leaf evaluator error';}
+    super(`Bounded search stopped: ${reason}. No placement selected.`); this.code=code;this.reason=reason;
+  }
 }
 const fail=(code,reason)=>{throw new SearchFailure(code,reason);};
 const bounded=(n,max)=>Number.isInteger(n)&&n>=1&&n<=max;
@@ -78,7 +85,7 @@ async function search(packet,config,evaluator,policy,signal) {
   const parentSignal=signal,scope=new AbortController(),forwardAbort=()=>scope.abort();
   parentSignal?.addEventListener('abort',forwardAbort,{once:true});if(parentSignal?.aborted)scope.abort();signal=scope.signal;
   const started=performance.now(),stats={nodes:0,evaluatorCalls:0,rootsOffered:0,rootsCompleted:0,childrenEnumerated:0,leavesEvaluated:0,pruned:0,elapsedMs:0};
-  let deadline=config.timeMs;
+  let deadline=config.timeMs,acceptedRequestId=null;
   const check=()=>{if(signal?.aborted)fail('cancelled','cancelled');if(performance.now()-started>=deadline)fail('timeout','time budget');};
   const visit=async()=>{check();if(stats.nodes>=config.nodeCap)fail('budget','node budget');stats.nodes++;if(stats.nodes%16===0)await new Promise(r=>setTimeout(r,0));check();};
   const evaluate=async leaf=>{
@@ -92,7 +99,7 @@ async function search(packet,config,evaluator,policy,signal) {
     check();if(typeof value!=='number'||!Number.isFinite(value)||Math.abs(value)>1000000)fail('schema','invalid leaf value');stats.leavesEvaluated++;return value;
   };
   try{
-    checkPacket(packet);stats.rootsOffered=packet.candidates.length;deadline=Math.min(config.timeMs,packet.deadlineMs);check();const roots=[];
+    checkPacket(packet);acceptedRequestId=packet.requestId;stats.rootsOffered=packet.candidates.length;deadline=Math.min(config.timeMs,packet.deadlineMs);check();const roots=[];
     for(const root of packet.candidates){
       await visit();let bestLeaf=null,bestValue=-Infinity,leafCount=0;
       if(config.depth===1||root.afterstate.status==='over'){
@@ -120,9 +127,14 @@ async function search(packet,config,evaluator,policy,signal) {
     stats.elapsedMs=performance.now()-started;
     const report={version:LOOKAHEAD_VERSION,requestId:packet.requestId,ok:true,complete:true,policy,stats,selectedRootId:selected.rootId,value:selected.value,roots};
     if(size(report)>config.maxOutputBytes)fail('budget','output budget');check();return freeze(report);
-  }catch(error){const safe=error instanceof SearchFailure?error:new SearchFailure('input','invalid public data');
+  }catch(error){let safe=new SearchFailure('input','invalid public data');
+    if(error instanceof SearchFailure){try{safe=new SearchFailure(error.code,error.reason);}catch{safe=new SearchFailure('provider_error','leaf evaluator error');}}
     stats.elapsedMs=performance.now()-started;
-    return freeze({version:LOOKAHEAD_VERSION,requestId:typeof packet?.requestId==='string'?packet.requestId:null,ok:false,complete:false,error:{code:safe.code,reason:safe.reason},policy,stats,selectedRootId:null,value:null});
+    const core={version:LOOKAHEAD_VERSION,requestId:acceptedRequestId,ok:false,complete:false,error:{code:safe.code,reason:safe.reason},selectedRootId:null,value:null};
+    let report={...core,policyReference:{version:LOOKAHEAD_VERSION,tier:policy.tier,evaluatorVersion:policy.evaluator.version},limits:config,stats};
+    // Failed output is bounded too; invalid identities and complete evaluator policies are never echoed.
+    if(size(report)>config.maxOutputBytes)report={...core,requestId:null,stats:{nodes:stats.nodes,evaluatorCalls:stats.evaluatorCalls,elapsedMs:stats.elapsedMs}};
+    return freeze(report);
   }finally{parentSignal?.removeEventListener('abort',forwardAbort);scope.abort();}
 }
 export async function evaluateLookahead(packet,{evaluator=localLeafEvaluator(),signal,...options}={}) {
