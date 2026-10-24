@@ -2,7 +2,16 @@
 export const DEFAULT_SEED = 0x6d2b79f5;
 export const BOARD_WIDTH = 10;
 export const BOARD_HEIGHT = 20;
-const TYPES = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'];
+export const RULES = Object.freeze({
+  version: 'local-classic-1', width: BOARD_WIDTH, height: BOARD_HEIGHT, hiddenRows: 0,
+  types: Object.freeze(['I', 'O', 'T', 'S', 'Z', 'J', 'L']),
+  kicks: Object.freeze([0, -1, 1, -2, 2]), clearPoints: Object.freeze([0, 100, 300, 500, 800]),
+  linesPerLevel: 10, gravityStartMs: 800, gravityFactor: 0.85, minimumGravityMs: 100,
+  previewCount: 5, rotation: 'clockwise square matrix', immediateLock: true,
+  objective: 'endless score and survival', randomizer: 'seeded seven-bag',
+  hold: false, ghost: false, spins: false, combos: false, lockDelayMs: 0,
+});
+const TYPES = RULES.types;
 const SHAPES = {
   I: ['0000', '1111', '0000', '0000'],
   O: ['11', '11'],
@@ -52,7 +61,7 @@ function fits(board, piece) {
 }
 
 export function gravityInterval(level) {
-  return Math.max(100, Math.floor(800 * 0.85 ** (level - 1)));
+  return Math.max(RULES.minimumGravityMs, Math.floor(RULES.gravityStartMs * RULES.gravityFactor ** (level - 1)));
 }
 
 export function createGame(seed = DEFAULT_SEED) {
@@ -76,7 +85,10 @@ export function createGame(seed = DEFAULT_SEED) {
 function spawn(state) {
   const type = state.queue[0];
   let queue = state.queue.slice(1), rng = state.rng;
-  if (!queue.length) ({ queue, rng } = shuffledBag(rng));
+  // Refill early without changing the ordinal piece sequence. Only observe() exposes previewCount.
+  while (queue.length < RULES.previewCount) {
+    const bag = shuffledBag(rng); queue = [...queue, ...bag.queue]; rng = bag.rng;
+  }
   const active = { type, rotation: 0, x: Math.floor((BOARD_WIDTH - SHAPES[type].length) / 2), y: 0 };
   const playable = fits(state.board, active);
   return { ...state, queue, rng, nextType: queue[0], active: playable ? active : null,
@@ -95,8 +107,8 @@ function lock(state) {
   const cleared = BOARD_HEIGHT - remaining.length;
   while (remaining.length < BOARD_HEIGHT) remaining.unshift(emptyRow());
   const lines = state.lines + cleared;
-  return spawn({ ...state, board: remaining, lines, level: 1 + Math.floor(lines / 10),
-    score: state.score + [0, 100, 300, 500, 800][cleared] * state.level,
+  return spawn({ ...state, board: remaining, lines, level: 1 + Math.floor(lines / RULES.linesPerLevel),
+    score: state.score + RULES.clearPoints[cleared] * state.level,
     gravityElapsed: 0 });
 }
 
@@ -110,7 +122,7 @@ export function move(state, dx) {
 export function rotate(state) {
   if (state.status !== 'playing') return state;
   const turned = { ...state.active, rotation: (state.active.rotation + 1) % 4 };
-  for (const kick of [0, -1, 1, -2, 2]) {
+  for (const kick of RULES.kicks) {
     const active = { ...turned, x: turned.x + kick };
     if (fits(state.board, active)) return { ...state, active };
   }
