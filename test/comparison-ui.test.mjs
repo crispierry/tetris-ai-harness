@@ -17,6 +17,7 @@ function fixture(){const nodes=new Map(),listeners={};const $=id=>{if(!nodes.has
 test('actual facade UI controls validate, lock, retain errors, replay without decisions and export the same saved run',async()=>{
   const {$,doc}=fixture();let exported;const c=mountComparison(doc,{onExport:json=>{exported=JSON.parse(json);}});
   assert.equal($('c-0-board').children.length,200); assert.equal($('c-start').disabled,false);
+  assert.match($('c-1-details').textContent,/local-leaf-value-1/);assert.match($('c-1-details').textContent,/maxOutputBytes/);
   $('c-samples').value='9';await $('c-step').trigger('click'); assert.match($('c-error').textContent,/samples/);assert.equal(c.view.locked,false);
   $('c-samples').value='1';$('c-left').value='error';$('c-right').value='local';$('c-pieceCap').value='2';
   await $('c-step').trigger('click'); assert.equal($('c-0-status').textContent,'Error'); assert.equal($('c-1-pieces').textContent,'1');

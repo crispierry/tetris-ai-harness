@@ -92,3 +92,16 @@ test('automatic two-sample run ends at caps and a disposed session cannot wake t
   assert.deepEqual(c.view.summary.pairs.map(p=>[p.left.pieces,p.right.pieces]),[[2,2],[2,2]]);
   assert.equal(c.view.frameCount,12); const frames=c.view.frameCount; c.dispose(); await pause(80); assert.equal(c.view.frameCount,frames);
 });
+
+test('immutable saved policy identifies evaluator, all search limits and visible horizon in live/replay/export details', async () => {
+  const c=new Comparison({config:{left:'look1',right:'look2',nodeCap:1,timeMs:1000}});await c.step();
+  const record=JSON.parse(c.exportRun());assert.equal(record.policies.length,2);
+  for(const entry of record.policies){const p=entry.policy;assert.equal(p.evaluator.version,'local-leaf-value-1');
+    assert.equal(p.callCap,1);assert.equal(p.nodeCap,1);assert.equal(p.timeMs,1000);assert.equal(p.maxOutputBytes,2097152);
+    assert.equal(p.discount,.9);assert.match(p.horizon,/at most one known next placement/);assert.match(p.tieOrder,/Original root/);
+    assert.equal(p.evaluator.policy.weights.holes,-5);assert.equal(p.live,false);assert.equal(p.pruning,'none; every offered root and reachable child within caps');}
+  assert.deepEqual(record.policies.map(p=>p.policy.depth),[1,2]);
+  assert(record.frames.every(f=>record.policies.some(p=>p.id===f.policyId)));
+  assert(Object.isFrozen(c.view.lanes[0].policy.evaluator.policy.weights));
+  c.replay();c.pause();assert.equal(c.view.lanes[0].policy.evaluator.version,'local-leaf-value-1');c.dispose();
+});

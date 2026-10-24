@@ -51,7 +51,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
       text(prefix + 'outcome', lane.outcome ? `${lane.outcome.reason}. ${lane.outcome.censored ? 'Censored outcome.' : 'Natural game over.'} Reset to change settings.` : 'Endless score and survival. No winning threshold.');
       text(prefix + 'choice', lane.lastDecision ? `${lane.lastDecision.candidate.piece} · ${Math.round(lane.lastDecision.latencyMs)} ms local decision overhead${view.mode === 'replay' ? ' (recorded)' : ''}` : 'No piece selected yet.');
-      text(prefix + 'details', JSON.stringify({ placement: lane.lastDecision?.candidate ?? null, search: lane.search,
+      text(prefix + 'details', JSON.stringify({ placement: lane.lastDecision?.candidate ?? null, search: lane.search, policy: lane.policy,
         recordedStatus: lane.recordedStatus ?? null, valueMeaning: 'Raw board features; scalar leaf value is not a probability.' }, null, 2));
     });
     const s = view.summary;

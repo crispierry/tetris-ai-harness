@@ -1,4 +1,4 @@
-import { Controller, heuristic, mockProvider } from './controller.mjs';
+import { Controller, heuristic, mockProvider, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { createLookaheadProvider, LOOKAHEAD_VERSION } from './lookahead.mjs';
 import { freeze, VERSIONS } from './harness.mjs';
 import { RULES } from './engine.mjs';
@@ -45,6 +45,22 @@ function compactSearch(provider) {
   return r ? { version: r.version, ok: r.ok, complete: r.complete, error: r.error ?? null, stats: r.stats,
     tier: provider.runMetadata.search.tier, limits: { nodeCap: provider.runMetadata.search.nodeCap, timeMs: provider.runMetadata.search.timeMs } } : null;
 }
+function lanePolicy(provider, key) {
+  const p = provider.runMetadata?.search;
+  if (!p) return freeze({ version: provider.version, kind: provider.kind, assistance: 'canonical-afterstates-v1',
+    weights: HEURISTIC_WEIGHTS, tieOrder: 'Original candidate order', terminalPenalty: -1000000000,
+    fixture: key === 'delay' || key === 'error' ? { mode: key, delayMs: 250 } : null,
+    meaning: 'Deterministic local board heuristic, not a probability', live: false });
+  // Copy only the accepted public policy contract, never roots, responses or private engine state.
+  return freeze(copy({ version: p.version, rulesVersion: p.rulesVersion, featureVersion: p.featureVersion,
+    objective: p.objective, tier: p.tier, depth: p.depth, nodeCap: p.nodeCap, callCap: p.callCap,
+    timeMs: p.timeMs, maxOutputBytes: p.maxOutputBytes, discount: p.discount,
+    evaluator: { name: p.evaluator.name, kind: p.evaluator.kind, version: p.evaluator.version,
+      policy: { weights: p.evaluator.policy.weights, terminalPenalty: p.evaluator.policy.terminalPenalty,
+        valueRange: p.evaluator.policy.valueRange, meaning: p.evaluator.policy.meaning } },
+    rootReward: p.rootReward, tieOrder: p.tieOrder, pruning: p.pruning, cache: p.cache,
+    reachabilityBounds: p.reachabilityBounds, horizon: p.horizon, live: p.live, modelCalls: p.modelCalls, spendCapUSD: p.spendCapUSD }));
+}
 function replayView(frame) {
   return freeze({ ...frame, status: 'replay', recordedStatus: frame.status, busy: false,
     observation: { ...frame.observation, board: frame.observation.board.map(row => [...row].map(c => c === '.' ? null : c)) },
@@ -54,7 +70,7 @@ function replayView(frame) {
 /** Own local controllers and own saved frames only. No transport, import, or canonical replay verifier. */
 export class Comparison {
   #config; #factory; #onChange; #lanes = []; #sample = 0; #epoch = 0; #timers = new Set(); #auto = false;
-  #state = 'ready'; #locked = false; #frames = []; #frameBytes = 0; #pairs = []; #archiveError = null;
+  #state = 'ready'; #locked = false; #frames = []; #frameBytes = 0; #pairs = []; #policies = []; #archiveError = null;
   #mode = 'live'; #replayIndex = -1; #replayLanes = []; #id = ++instances;
   #seeds = Array.from({ length: 8 }, (_, i) => (0x51f15e + Math.imul(i + 1, 0x9e3779b9)) >>> 0);
   constructor({ config = {}, onChange = () => {}, providerFactory = providerFor } = {}) {
@@ -70,13 +86,13 @@ export class Comparison {
     const view = lane.controller.view;
     return freeze({ ...view, status: lane.outcome?.status ?? view.status, outcome: lane.outcome,
       assistance: lane.key.startsWith('look') ? `visible-depth-${lane.key.slice(-1)}-full-occupancy-v1` : 'canonical-afterstates-v1',
-      search: compactSearch(lane.provider) });
+      search: compactSearch(lane.provider), policy: lane.policy });
   }
   #emit() { this.#onChange(this.view); }
   #setup() {
     this.#lanes = ['left', 'right'].map((side, index) => {
       const key = this.#config[side], provider = this.#factory(key, this.#config, { sample: this.#sample + 1, lane: index });
-      const lane = { key, provider, outcome: null, controller: null };
+      const lane = { key, provider, outcome: null, controller: null, policy: lanePolicy(provider, key) };
       lane.controller = new Controller({ seed: this.#seeds[this.#sample], sessionId: `compare-${this.#id}-${this.#epoch}-${index}`,
         provider, deadlineMs: LIMITS.deadlineMs, onChange: () => { if (this.#lanes.includes(lane)) this.#emit(); } });
       return lane;
@@ -89,9 +105,12 @@ export class Comparison {
   #record(index, event) {
     if (this.#archiveError) return;
     const lane = this.#lanes[index], view = this.#laneView(lane);
+    const policyId = `sample-${this.#sample + 1}-lane-${index}`;
+    if (!this.#policies.some(p => p.id === policyId)) this.#policies.push(freeze({ id: policyId,
+      sample: this.#sample + 1, lane: index, player: copy(view.player), policy: lane.policy }));
     const frame = freeze(copy({ version: 1, sample: this.#sample + 1, lane: index, event, status: view.status,
       observation: compactObservation(view.observation), pieces: view.pieces, player: view.player, assistance: view.assistance,
-      error: view.error?.slice(0, 500) ?? null, outcome: view.outcome, decision: compactDecision(view.lastDecision), search: view.search }));
+      error: view.error?.slice(0, 500) ?? null, outcome: view.outcome, decision: compactDecision(view.lastDecision), search: view.search, policyId }));
     const length = bytes(frame);
     if (this.#frames.length >= LIMITS.frames || this.#frameBytes + length > LIMITS.exportBytes - 131072) {
       this.#archiveError = 'Saved-frame capacity reached. Play stopped; existing frames and outcomes are retained.';
@@ -177,17 +196,18 @@ export class Comparison {
   stop() { this.#fence('stopped'); this.#state = this.#mode === 'replay' ? 'replay' : 'stopped'; this.#emit(); }
   reset() {
     this.#fence('stopped'); this.#sample = 0; this.#locked = false; this.#frames = []; this.#frameBytes = 0;
-    this.#pairs = []; this.#archiveError = null; this.#mode = 'live'; this.#replayIndex = -1; this.#replayLanes = [];
+    this.#pairs = []; this.#policies = []; this.#archiveError = null; this.#mode = 'live'; this.#replayIndex = -1; this.#replayLanes = [];
     this.#state = 'ready'; this.#setup(); this.#emit();
   }
   replay() {
     if (!this.#frames.length) throw new Error('Run or step before replaying saved frames.');
     this.#fence(); this.#mode = 'replay'; this.#state = 'replay'; this.#replayIndex = -1;
-    this.#replayLanes = this.#frames.slice(0, 2).map(replayView); this.#auto = true; this.#playReplay(this.#epoch);
+    this.#replayLanes = this.#frames.slice(0, 2).map(frame => this.#replayView(frame)); this.#auto = true; this.#playReplay(this.#epoch);
   }
+  #replayView(frame) { return freeze({ ...replayView(frame), policy: this.#policies.find(p => p.id === frame.policyId).policy }); }
   #replayNext() {
     if (this.#replayIndex + 1 >= this.#frames.length) { this.#auto = false; this.#emit(); return false; }
-    const frame = this.#frames[++this.#replayIndex]; this.#replayLanes[frame.lane] = replayView(frame); this.#emit(); return true;
+    const frame = this.#frames[++this.#replayIndex]; this.#replayLanes[frame.lane] = this.#replayView(frame); this.#emit(); return true;
   }
   #playReplay(epoch) {
     if (epoch !== this.#epoch || !this.#auto) return;
@@ -204,7 +224,7 @@ export class Comparison {
       config: this.#config, policy: { deadlineMs: LIMITS.deadlineMs, plannedPlacements: 2 * this.#config.samples * this.#config.pieceCap,
         lookaheadVersion: LOOKAHEAD_VERSION, pairing: 'Private paired sequences omitted', liveProviders: false, modelCalls: 0,
         actualCostUSD: null, replay: 'Saved visual frames only; not canonical Node verification' },
-      summary: this.#summary(), archiveError: this.#archiveError, frames: [...this.#frames] });
+      summary: this.#summary(), archiveError: this.#archiveError, policies: [...this.#policies], frames: [...this.#frames] });
     const json = JSON.stringify(record);
     if (new TextEncoder().encode(json).length > LIMITS.exportBytes) throw new Error('Export exceeds eight MiB; no file created.');
     return json;
