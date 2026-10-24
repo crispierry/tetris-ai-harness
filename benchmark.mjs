@@ -61,7 +61,7 @@ export function preflight(options, players, seeds) {
     objective: RULES.objective, target: null, hold: false, previewCount: 5, initialBoard: 'empty-10x20', randomizer: 'seven-bag-xorshift32-fisher-yates',
     clock: 'step-frozen-game-time', actions: ['left','right','clockwise','down','drop'], assistance: 'canonical-afterstates-v1',
     seedSetReference: `${options.runId}-private-seeds`, seedCount: seeds.length, players: identities, ...config,
-    retryLimit: 0, live: false, budgetUSD: 0, maxPlannedPlacements:8000, maxEvents:16032, maxArtifactBytes:33554432,
+    retryLimit: 0, live: false, budgetUSD: 0, fallbackProvider: identity(heuristic()), maxPlannedPlacements:8000, maxEvents:16032, maxArtifactBytes:33554432,
     limits: 'Endless game; cap is censoring, never victory. Offline fixtures do not establish live model quality or pricing.' });
   validateManifest(manifest);
   return { manifest, instances };
@@ -81,6 +81,7 @@ function validateManifest(m) {
       p.capabilities?.movementMode==='reachable-paused-gravity-v1'&&p.capabilities.assistance==='canonical-afterstates-v1'&&bounded(p.capabilities.maxCandidates,800),'Incompatible manifest provider');
     publicMetadata(p);assert(Buffer.byteLength(stableJSON(p))<=16384,'Provider manifest too large');
   }
+  if (m.fallbackProvider !== undefined) assert(stableJSON(m.fallbackProvider) === stableJSON(identity(heuristic())), 'Incompatible fallback policy');
 }
 function validateRecord(record,manifest) {
   validateManifest(manifest);
@@ -184,7 +185,9 @@ export function recomputeRun(record,manifest) {
     ['game-loss','piece-cap','event-cap','cancelled','run-deadline','decision-timeout','budget-stop','provider-error'].includes(record.outcome), 'Unsupported run artifact');
   assert([0,1].includes(record.lane) && manifest.players?.length===2 && ['none','local-heuristic-explicit'].includes(manifest.fallback),'Invalid run policy');
   let observation = record.initialObservation, pieces = 0, failures = 0, assisted = 0; const sequence = [], latencies = [], usage = {}, errorCounts={};
-  let expectedRole='primary';const fallbackIdentity=identity(heuristic());
+  // Earlier saved manifests did not declare fallback policy metadata. Preserve
+  // their exact historical default identity without weakening new manifests.
+  let expectedRole='primary';const fallbackIdentity=manifest.fallbackProvider ?? {...identity(heuristic()), configuration:null};
   record.events.forEach((event,index) => {
     validateObservation(event.observationBefore);validateObservation(event.observationAfter);
     assert(observation.status!=='over'&&observation.terminalReason===null&&pieces<manifest.maxPieces&&index<manifest.maxEvents,'Event follows terminal game or exhausted cap');

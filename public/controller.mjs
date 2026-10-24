@@ -5,7 +5,9 @@ export const HEURISTIC_WEIGHTS = Object.freeze({ holes: -5, aggregateHeight: -0.
 export function heuristic(weights = HEURISTIC_WEIGHTS, name = 'Local heuristic') {
   const w = { ...HEURISTIC_WEIGHTS, ...weights };
   if (Object.values(w).some(v => !Number.isFinite(v))) throw new TypeError('Finite heuristic weights required');
-  return Object.freeze({ name, kind: 'local', version: 'heuristic-1',
+  const policy = freeze({ weights: Object.fromEntries(Object.keys(HEURISTIC_WEIGHTS).map(key => [key, w[key]])), terminalPenalty: -1e9, tieBreak: 'first offered candidate with maximum score' });
+  const runMetadata = freeze({ mode: 'local', policyVersion: 'heuristic-score-1', policy, liveEnabled: false });
+  return Object.freeze({ name, kind: 'local', version: 'heuristic-1', runMetadata,
     capabilities: Object.freeze({ movementMode: 'reachable-paused-gravity-v1', assistance: 'canonical-afterstates-v1', maxCandidates: 800 }),
     async decide(packet) {
       let selected = null, best = -Infinity;
@@ -22,6 +24,7 @@ export function mockProvider({ mode = 'delay', delayMs = 350 } = {}) {
   if (!['delay', 'error', 'stale', 'invalid', 'never'].includes(mode) || !Number.isInteger(delayMs) || delayMs < 0 || delayMs > 60000) throw new TypeError('Invalid mock settings');
   const local = heuristic();
   return Object.freeze({ ...local, name: mode === 'delay' ? 'Delayed mock' : `${mode[0].toUpperCase() + mode.slice(1)} mock`, kind: 'mock', version: 'mock-1',
+    runMetadata: freeze({ ...local.runMetadata, mode: 'offline-mock', mockMode: mode, delayMs }),
     async decide(packet, { signal } = {}) {
       await new Promise((resolve, reject) => {
         if (signal?.aborted) return reject(new Error('Cancelled'));

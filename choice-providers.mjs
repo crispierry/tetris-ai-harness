@@ -89,32 +89,39 @@ export function createChoiceAdapter({ protocol, config: overrides = {}, transpor
       if (active) fail('configuration');
       const job = { serial: ++serial }; active = job;
       const abort = new AbortController(), started = performance.now();
-      let timer, listener, response, parsed, code, attempts = 0;
+      let timer, listener, response, parsed, code, attempts = 0, deadline = Infinity;
       try {
         packetCheck(packet, config); if (signal?.aborted) fail('cancelled');
+        deadline = started + Math.min(config.timeoutMs, packet.deadlineMs);
+        const current = () => {
+          if (abort.signal.aborted || signal?.aborted) fail('cancelled');
+          if (performance.now() >= deadline) fail('timeout');
+        };
+        current();
+        let decoded;
         if (packet.candidates.length === 1) {
-          parsed = { choice: { requestId: packet.requestId, stateRevision: packet.stateRevision, selectedCandidateId: packet.candidates[0].id }, distribution: null, confidence: null };
+          decoded = { choice: { requestId: packet.requestId, stateRevision: packet.stateRevision, selectedCandidateId: packet.candidates[0].id }, distribution: null, confidence: null };
         } else {
           if (!transport) fail('unavailable');
           const request = requestFor(protocol, packet, config);
           const guard = new Promise((_, reject) => {
             listener = () => { if (active === job) active = null; abort.abort(); reject(new ProviderError('cancelled')); };
             signal?.addEventListener('abort', listener, { once: true });
-            timer = setTimeout(() => { if (active === job) active = null; abort.abort(); reject(new ProviderError('timeout')); }, Math.min(config.timeoutMs, packet.deadlineMs));
+            timer = setTimeout(() => { if (active === job) active = null; abort.abort(); reject(new ProviderError('timeout')); }, Math.max(0, deadline - performance.now()));
           });
-          try { response = await Promise.race([Promise.resolve().then(() => { attempts++; return transport(request, { signal: abort.signal }); }), guard]); }
+          try { response = await Promise.race([Promise.resolve().then(() => { current(); attempts++; return transport(request, { signal: abort.signal }); }), guard]); }
           catch (error) { if (error instanceof ProviderError) throw error; fail('transport_ambiguous'); }
-          if (abort.signal.aborted || signal?.aborted) fail('cancelled');
-          parsed = parse(protocol, response, packet);
+          current();
+          decoded = parse(protocol, response, packet);
         }
-        validateChoice(packet, parsed.choice); return freeze(parsed.choice);
+        validateChoice(packet, decoded.choice); current(); parsed = decoded; return freeze(parsed.choice);
       } catch (error) { code = error instanceof ProviderError ? error.code : 'schema'; throw new ProviderError(code); }
       finally {
         clearTimeout(timer); signal?.removeEventListener('abort', listener); abort.abort(); if (active === job) active = null;
         let responseSha256 = null;
         try { if (response?.body && size(response.body) <= 65536) responseSha256 = createHash('sha256').update(JSON.stringify(response.body)).digest('hex'); } catch { /* No raw body is retained. */ }
         const usage = {}; for (const key of ['input_tokens', 'output_tokens', 'total_tokens']) if (Number.isSafeInteger(response?.body?.usage?.[key]) && response.body.usage[key] >= 0) usage[key] = response.body.usage[key];
-        const finished = freeze({ metadata, requestId: typeof packet?.requestId === 'string' ? packet.requestId : null, attempts,
+        let finished = freeze({ metadata, requestId: typeof packet?.requestId === 'string' ? packet.requestId : null, attempts,
           outcome: code ? 'provider-error' : attempts ? 'selected' : 'single-legal-candidate; no provider decision', errorCode: code ?? null,
           latencyMs: performance.now() - started, selectedCandidateId: parsed?.choice.selectedCandidateId ?? null,
           choiceDistribution: parsed?.distribution ?? null, confidence: parsed?.confidence ?? null, confidenceMeaning: definition.confidenceMeaning,
@@ -122,7 +129,10 @@ export function createChoiceAdapter({ protocol, config: overrides = {}, transpor
           reportedModelStatus: response?.body?.model === undefined ? 'not reported' : compatible(protocol, response.body.model) ? 'compatible reported identity; live unverified' : 'incompatible; rejected',
           usage: Object.keys(usage).length ? usage : null, usageProvenance: 'fixture response, not actual API usage', actualCostUSD: null,
           responseSha256, rawResponseArtifactRef: /^fixture:[A-Za-z0-9_./#-]{1,200}$/.test(response?.artifactRef ?? '') ? response.artifactRef : null, rawResponseRetained: false });
+        const finalCode = !code && (signal?.aborted ? 'cancelled' : performance.now() >= deadline ? 'timeout' : null);
+        finished = freeze({ ...finished, latencyMs: performance.now() - started, ...(finalCode ? { outcome: 'provider-error', errorCode: finalCode, selectedCandidateId: null, choiceDistribution: null, confidence: null } : {}) });
         if (job.serial >= receiptSerial) { receipt = finished; receiptSerial = job.serial; }
+        if (finalCode) throw new ProviderError(finalCode);
       }
     } });
 }

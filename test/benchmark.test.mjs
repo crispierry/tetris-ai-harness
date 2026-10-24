@@ -7,6 +7,24 @@ const sourceRevision='f90ec403f7a3e48b9485003a5140fe8f9a65c7e7';
 const options=extra=>({runId:'paired-test',sourceRevision,maxPieces:12,deadlineMs:100,runWallMs:10000,...extra});
 const players=()=>[{create:()=>heuristic()},{create:()=>mockProvider({mode:'delay',delayMs:0})}];
 const clone=x=>JSON.parse(JSON.stringify(x));
+test('policy identity distinguishes custom weights and detects factory changes across seeds',()=>{
+ const a=preflight(options(),[{create:()=>heuristic()},{create:()=>heuristic({aggregateHeight:1,maxHeight:10})}],[1]);
+ assert.notEqual(stableJSON(a.manifest.players[0]),stableJSON(a.manifest.players[1]));
+ assert.equal(a.manifest.players[1].configuration.policy.weights.aggregateHeight,1);
+ const b=preflight(options(),[{create:()=>heuristic({holes:-5})},{create:()=>heuristic()}],[1]);assert.equal(stableJSON(b.manifest.players[0]),stableJSON(b.manifest.players[1]));
+ let n=0;assert.throws(()=>preflight(options(),[{create:()=>heuristic({holes:++n===1?-5:-100})},{create:()=>heuristic()}],[1,2]),/configuration changed/);
+ let delay=0;assert.throws(()=>preflight(options(),[{create:()=>mockProvider({delayMs:delay++})},{create:()=>heuristic()}],[1,2]),/configuration changed/);
+});
+test('new fallback policy is bound while historical null-metadata fallback replay remains compatible',async()=>{
+ const a=await runPaired({options:options({maxPieces:1,fallback:'local-heuristic-explicit'}),players:[{create:()=>mockProvider({mode:'error',delayMs:0})},{create:()=>heuristic()}],seeds:[1]});
+ assert.equal(a.manifest.fallbackProvider.configuration.policy.weights.holes,-5);
+ const run=a.runs[0],fallback=run.events.find(e=>e.role==='fallback');assert.deepEqual(fallback.provider,a.manifest.fallbackProvider);
+ const altered=clone(run);altered.events.find(e=>e.role==='fallback').provider.configuration=null;
+ assert.throws(()=>recomputeRun(altered,a.manifest),/attribution/);
+ const legacyManifest=clone(a.manifest);delete legacyManifest.fallbackProvider;
+ assert.deepEqual(recomputeRun(altered,legacyManifest),run.metrics);assert((await replayRun(legacyManifest,altered,1)).verified);
+ const tampered=clone(a.manifest);tampered.fallbackProvider.configuration.policy.weights.holes=999;assert.throws(()=>recomputeRun(run,tampered),/fallback policy/);
+});
 test('paired runs isolate games/providers, preserve ordinal sequences across delays, and expose recomputable metrics',async()=>{
  const artifact=await runPaired({options:options(),players:players(),seeds:[1,2]});
  assert.equal(artifact.runs.length,4);assert.equal(artifact.aggregate.sampleCount,2);assert.equal(artifact.partial,false);

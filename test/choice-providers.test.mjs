@@ -14,6 +14,23 @@ function success(request, protocol, alter = x => x) {
     answers: protocol === 'decisions' ? [answer] : { placement: answer }, usage: { input_tokens: 100, output_tokens: 5 } } };
 }
 for (const protocol of ['decisions', 'jev']) {
+  test(`${protocol}: blocking fixture respects minimum adapter/packet deadline and never commits`,async()=>{
+    let packet;const capture=createChoiceAdapter({protocol,transport:fixture(r=>{packet=packetOf(r,protocol);return success(r,protocol);})});await new Controller({provider:capture}).step();
+    for(const packetCap of [false,true]){
+      let calls=0,signal;const adapter=createChoiceAdapter({protocol,config:{timeoutMs:packetCap?1000:1},transport:fixture((r,ctx)=>{calls++;signal=ctx.signal;const until=performance.now()+20;while(performance.now()<until){}return success(r,protocol);})});
+      if(packetCap)await assert.rejects(adapter.decide({...packet,deadlineMs:1}),e=>e.code==='timeout');
+      else{const c=new Controller({provider:adapter,deadlineMs:1000});await c.step();assert.equal(c.view.pieces,0);assert.equal(c.view.status,'error');}
+      assert.equal(adapter.lastReceipt.errorCode,'timeout');assert.equal(adapter.lastReceipt.selectedCandidateId,null);assert.equal(adapter.lastReceipt.attempts,calls);assert(calls<=1);if(signal)assert(signal.aborted);
+    }
+  });
+  test(`${protocol}: response parsing cannot overrun the deadline and retain a selection`,async()=>{
+    const adapter=createChoiceAdapter({protocol,config:{timeoutMs:10},transport:fixture(r=>{const result=success(r,protocol),answers=result.body.answers;Object.defineProperty(result.body,'answers',{enumerable:true,get(){const until=performance.now()+20;while(performance.now()<until){}return answers;}});return result;})});
+    const c=new Controller({provider:adapter,deadlineMs:1000});await c.step();assert.equal(c.view.pieces,0);assert.equal(adapter.lastReceipt.errorCode,'timeout');assert.equal(adapter.lastReceipt.selectedCandidateId,null);
+  });
+  test(`${protocol}: receipt extraction past deadline cannot return a selected choice`,async()=>{
+    const adapter=createChoiceAdapter({protocol,config:{timeoutMs:10},transport:fixture(r=>{const result=success(r,protocol);Object.defineProperty(result,'artifactRef',{get(){const until=performance.now()+20;while(performance.now()<until){}return 'fixture:test/choice';}});return result;})});
+    const c=new Controller({provider:adapter,deadlineMs:1000});await c.step();assert.equal(c.view.pieces,0);assert.equal(adapter.lastReceipt.errorCode,'timeout');assert.equal(adapter.lastReceipt.selectedCandidateId,null);assert.equal(adapter.lastReceipt.choiceDistribution,null);
+  });
   test(`${protocol}: independently selectable full semantic packet and complete labeled distribution`, async () => {
     let request;
     const adapter = createChoiceAdapter({ protocol, transport: fixture(async r => { request = r; return success(r, protocol); }) });

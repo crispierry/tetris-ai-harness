@@ -35,3 +35,11 @@ test('local heuristic completes a bounded natural whole game without credentials
  while(c.view.status!=='over'&&c.view.status!=='error'&&n++<3000)await c.step();
  assert.equal(c.view.status,'over',`expected natural loss, got ${c.view.status} after ${n}`);assert(c.view.pieces>1);assert.equal(c.view.observation.terminalReason,'blocked spawn');
 });
+test('effective heuristic policy is immutable and mock metadata identifies its actual fixture settings',()=>{
+ const input={holes:-9},p=heuristic(input);input.holes=100;
+ assert.equal(p.runMetadata.policy.weights.holes,-9);assert.equal(p.runMetadata.policy.weights.lines,8);
+ assert.equal(p.runMetadata.policy.terminalPenalty,-1e9);assert.match(p.runMetadata.policy.tieBreak,/first offered/);
+ assert(Object.isFrozen(p.runMetadata));assert(Object.isFrozen(p.runMetadata.policy));assert(Object.isFrozen(p.runMetadata.policy.weights));
+ assert.throws(()=>{p.runMetadata.policy.weights.holes=3;},TypeError);
+ const mock=mockProvider({mode:'error',delayMs:7});assert.equal(mock.runMetadata.mode,'offline-mock');assert.equal(mock.runMetadata.mockMode,'error');assert.equal(mock.runMetadata.delayMs,7);assert.equal(mock.runMetadata.liveEnabled,false);
+});
