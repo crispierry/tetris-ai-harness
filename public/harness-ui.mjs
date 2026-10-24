@@ -21,11 +21,12 @@ function render(view) {
   const occupied=new Set(GEOMETRY.find(g=>g.type===type).orientations[0].cells.map(p=>`${p.x},${p.y}`));
   for(let y=0;y<4;y++)for(let x=0;x<4;x++){const dot=document.createElement('span');if(occupied.has(`${x},${y}`))dot.className='filled';mini.append(dot);} $('h-next').append(mini);
  });
+ if(['over','error'].includes(view.status)&&previousStatus!==view.status){auto=false;loopToken++;clearTimeout(timer);announce(`${STATUS[view.status]}. ${view.error??`${format(view.pieces)} pieces, ${format(obs.lines)} lines.`}`);}
  const terminal=view.status==='over';$('h-start').textContent=['paused','stopped'].includes(view.status)?'Resume':'Start';$('h-start').disabled=auto||view.busy||terminal;$('h-step').disabled=auto||view.busy||terminal;
  $('h-pause').disabled=!auto&&!view.busy;$('h-stop').disabled=view.status==='ready'||view.status==='stopped'||terminal;$('h-provider').disabled=auto||view.busy;
  $('h-error').hidden=!view.error;$('h-error').textContent=view.error??'';
  if(view.lastDecision){const c=view.lastDecision.candidate;$('h-choice').textContent=`${c.piece} · ${c.cells.map(p=>`(${p.x}, ${p.y})`).join(' ')} · ${Math.round(view.lastDecision.latencyMs)} ms`;$('h-details').textContent=JSON.stringify({orientation:c.orientation,path:c.path,clearedRows:c.clearedRows,scoreDelta:c.scoreDelta,features:c.features},null,2);}else{$('h-choice').textContent='No piece selected yet.';$('h-details').textContent='Run or step to inspect a choice.';}
- if(['over','error'].includes(view.status)&&previousStatus!==view.status){auto=false;loopToken++;clearTimeout(timer);announce(`${STATUS[view.status]}. ${view.error??`${format(view.pieces)} pieces, ${format(obs.lines)} lines.`}`);}previousStatus=view.status;
+ previousStatus=view.status;
 }
 const controller=new Controller({sessionId:'harness',onChange:render});
 async function runLoop(token){if(!auto||token!==loopToken)return;await controller.step({continueRunning:true});if(auto&&token===loopToken&&controller.view.status==='running')timer=setTimeout(()=>runLoop(token),150);}
