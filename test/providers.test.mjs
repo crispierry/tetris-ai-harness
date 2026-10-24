@@ -4,6 +4,23 @@ import { createAstraAdapter, ASTRA_CONFIG, ProviderError } from '../providers.mj
 import { Controller } from '../public/controller.mjs';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fixture = fn => Object.assign(fn, { mode: 'fixture' });
+test('Astra rejects event-loop-blocking fixtures after adapter or packet deadline without committing',async()=>{
+ let packet;const capture=createAstraAdapter({transport:fixture(r=>{packet=JSON.parse(r.body.input[0].content[0].text);return success(r);})});await new Controller({provider:capture}).step();
+ for(const packetCap of [false,true]){
+  let calls=0,signal;const adapter=createAstraAdapter({config:{...ASTRA_CONFIG,timeoutMs:packetCap?1000:1},transport:fixture((r,ctx)=>{calls++;signal=ctx.signal;const until=performance.now()+20;while(performance.now()<until){}return success(r);})});
+  if(packetCap)await assert.rejects(adapter.decide({...packet,deadlineMs:1}),e=>e.code==='timeout');
+  else{const c=new Controller({provider:adapter,deadlineMs:1000});await c.step();assert.equal(c.view.pieces,0);assert.equal(c.view.status,'error');}
+  assert.equal(adapter.lastReceipt.errorCode,'timeout');assert.equal(adapter.lastReceipt.selectedCandidateId,null);assert.equal(adapter.lastReceipt.attempts,calls);assert(calls<=1);if(signal)assert(signal.aborted);
+ }
+});
+test('Astra checks elapsed time after decoding before attributing a selection',async()=>{
+ const adapter=createAstraAdapter({config:{...ASTRA_CONFIG,timeoutMs:10},transport:fixture(r=>{const result=success(r),output=result.body.output;Object.defineProperty(result.body,'output',{enumerable:true,get(){const until=performance.now()+20;while(performance.now()<until){}return output;}});return result;})});
+ const c=new Controller({provider:adapter,deadlineMs:1000});await c.step();assert.equal(c.view.pieces,0);assert.equal(adapter.lastReceipt.errorCode,'timeout');assert.equal(adapter.lastReceipt.selectedCandidateId,null);
+});
+test('Astra final receipt extraction cannot return a selection after its deadline',async()=>{
+ const adapter=createAstraAdapter({config:{...ASTRA_CONFIG,timeoutMs:10},transport:fixture(r=>{const result=success(r);Object.defineProperty(result,'artifactRef',{get(){const until=performance.now()+20;while(performance.now()<until){}return 'fixture:test/providers';}});return result;})});
+ const c=new Controller({provider:adapter,deadlineMs:1000});await c.step();assert.equal(c.view.pieces,0);assert.equal(adapter.lastReceipt.errorCode,'timeout');assert.equal(adapter.lastReceipt.selectedCandidateId,null);
+});
 function success(request, alter = x => x) {
   const packet = JSON.parse(request.body.input[0].content[0].text);
   const choice = alter({ requestId: packet.requestId, stateRevision: packet.stateRevision, selectedCandidateId: packet.candidates[0].id });

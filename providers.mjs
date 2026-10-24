@@ -88,20 +88,28 @@ export function createAstraAdapter({ config = ASTRA_CONFIG, transport, live = fa
       if (active) fail('configuration');
       const job = { serial: ++serial }; active = job;
       const abort = new AbortController(), started = performance.now();
-      let timer, listener, response, choice, code, attempts = 0;
+      let timer, listener, response, choice, code, attempts = 0, deadline = Infinity;
       try {
         if (!transport) fail('unavailable');
         if (signal?.aborted) fail('cancelled');
         const request = requestFor(packet, selected);
+        deadline = started + Math.min(selected.timeoutMs, packet.deadlineMs);
+        const current = () => {
+          if (abort.signal.aborted || signal?.aborted) fail('cancelled');
+          if (performance.now() >= deadline) fail('timeout');
+        };
+        current();
         const guard = new Promise((_, reject) => {
           listener = () => { if (active === job) active = null; abort.abort(); reject(new ProviderError('cancelled')); };
           signal?.addEventListener('abort', listener, { once: true });
-          timer = setTimeout(() => { if (active === job) active = null; abort.abort(); reject(new ProviderError('timeout')); }, Math.min(selected.timeoutMs, packet.deadlineMs));
+          timer = setTimeout(() => { if (active === job) active = null; abort.abort(); reject(new ProviderError('timeout')); }, Math.max(0, deadline - performance.now()));
         });
-        try { response = await Promise.race([Promise.resolve().then(() => { attempts++; return transport(request, { signal: abort.signal }); }), guard]); }
+        try { response = await Promise.race([Promise.resolve().then(() => { current(); attempts++; return transport(request, { signal: abort.signal }); }), guard]); }
         catch (error) { if (error instanceof ProviderError) throw error; fail('transport_ambiguous'); }
-        if (abort.signal.aborted || signal?.aborted) fail('cancelled');
-        choice = decode(response, packet);
+        current();
+        const decoded = decode(response, packet);
+        current();
+        choice = decoded;
         return freeze({ requestId: choice.requestId, stateRevision: choice.stateRevision, selectedCandidateId: choice.selectedCandidateId });
       } catch (error) {
         code = error instanceof ProviderError ? error.code : 'schema';
@@ -110,7 +118,7 @@ export function createAstraAdapter({ config = ASTRA_CONFIG, transport, live = fa
         clearTimeout(timer); signal?.removeEventListener('abort', listener); abort.abort(); if (active === job) active = null;
         let responseHash = null;
         try { if (response?.body && bytes(response.body) <= 65536) responseHash = createHash('sha256').update(JSON.stringify(response.body)).digest('hex'); } catch { /* Unserializable response is not retained. */ }
-        const finished = freeze({ requestId: typeof packet?.requestId === 'string' ? packet.requestId : null, metadata,
+        let finished = freeze({ requestId: typeof packet?.requestId === 'string' ? packet.requestId : null, metadata,
           latencyMs: performance.now() - started, outcome: code ? 'provider-error' : 'selected', errorCode: code ?? null,
           selectedCandidateId: choice?.selectedCandidateId ?? null, reportedModel: supportedModel(response?.body?.model) ? response.body.model : null,
           reportedModelStatus: response?.body?.model === undefined ? 'not reported' : supportedModel(response.body.model) ? 'compatible reported alias/version; live identity unverified' : 'incompatible; rejected',
@@ -118,7 +126,12 @@ export function createAstraAdapter({ config = ASTRA_CONFIG, transport, live = fa
           usage: tokenUsage(response?.body?.usage), usageProvenance: 'fixture response; not measured API usage', actualCostUSD: null,
           responseSha256: responseHash, rawResponseArtifactRef: /^fixture:[A-Za-z0-9_./#-]{1,200}$/.test(response?.artifactRef ?? '') ? response.artifactRef : null,
           rawResponseRetained: false, attempts });
+        // Receipt extraction may itself execute fixture getters. The async
+        // result is not accepted until this final bookkeeping has completed.
+        const finalCode = !code && (signal?.aborted ? 'cancelled' : performance.now() >= deadline ? 'timeout' : null);
+        finished = freeze({ ...finished, latencyMs: performance.now() - started, ...(finalCode ? { outcome: 'provider-error', errorCode: finalCode, selectedCandidateId: null } : {}) });
         if (job.serial >= receiptSerial) { receipt = finished; receiptSerial = job.serial; }
+        if (finalCode) throw new ProviderError(finalCode);
       }
     } });
 }
