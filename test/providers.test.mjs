@@ -100,3 +100,32 @@ test('invalid/oversize packets and already-aborted signals fail before fixture d
   const abort = new AbortController(); abort.abort(); await assert.rejects(a.decide(captured, { signal: abort.signal }), e => e.code === 'cancelled');
   assert.equal(calls, 0); assert.equal(a.lastReceipt.attempts, 0);
 });
+test('Reset immediately followed by Step releases only the cancelled job and ignores its late result', async () => {
+  let late, calls = 0;
+  const adapter = createAstraAdapter({ transport: fixture(r => {
+    calls++;
+    if (calls === 1) return new Promise(resolve => { late = () => resolve(success(r)); });
+    return Promise.resolve(success(r));
+  }) });
+  const controller = new Controller({ provider: adapter });
+  const old = controller.step(); await delay(0);
+  controller.reset(); const fresh = controller.step();
+  await Promise.all([old, fresh]);
+  assert.equal(calls, 2); assert.equal(controller.view.pieces, 1); assert.equal(controller.view.status, 'paused');
+  const receipt = adapter.lastReceipt; assert.equal(receipt.outcome, 'selected'); assert.equal(receipt.requestId, controller.view.lastDecision.requestId);
+  late(); await delay(0); assert.equal(controller.view.pieces, 1); assert.equal(adapter.lastReceipt, receipt);
+  await controller.step(); assert.equal(controller.view.pieces, 2);
+});
+test('reported incompatible models cannot substitute; a reported dated Astra version is retained honestly', async () => {
+  for (const model of ['unexpected-other-model', 'gpt-6-astra-secret-sentinel', 17]) {
+    const adapter = createAstraAdapter({ transport: fixture(async r => { const result = success(r); result.body.model = model; return result; }) });
+    const controller = new Controller({ provider: adapter }); await controller.step();
+    assert.equal(controller.view.pieces, 0); assert.equal(adapter.lastReceipt.errorCode, 'model_mismatch');
+    assert.equal(adapter.lastReceipt.reportedModelStatus, 'incompatible; rejected'); assert.equal(adapter.lastReceipt.reportedModel, null);
+    assert(!JSON.stringify(adapter.lastReceipt).includes('secret-sentinel'));
+  }
+  const adapter = createAstraAdapter({ transport: fixture(async r => { const result = success(r); result.body.model = 'gpt-6-astra-2026-10-01'; return result; }) });
+  const controller = new Controller({ provider: adapter }); await controller.step();
+  assert.equal(controller.view.pieces, 1); assert.equal(adapter.lastReceipt.reportedModel, 'gpt-6-astra-2026-10-01');
+  assert.equal(adapter.runMetadata.resolvedModel, null); assert.match(adapter.lastReceipt.reportedModelStatus, /live identity unverified/);
+});

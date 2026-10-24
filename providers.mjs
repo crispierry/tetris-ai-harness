@@ -10,6 +10,7 @@ const messages = Object.freeze({ configuration: 'Unsupported adapter configurati
   authentication: 'Provider authentication failed.', rate_limit: 'Provider rate limit reached.', transport_ambiguous: 'Transport outcome is unknown; no retry was made.',
   provider_error: 'Provider request failed.', refusal: 'Provider refused the decision.', incomplete: 'Provider response is incomplete.',
   schema: 'Provider response is invalid, stale or not an offered candidate.', size: 'Provider response exceeds the bounded size.',
+  model_mismatch: 'Provider reported an incompatible model; no substitution is permitted.',
   timeout: 'Adapter decision deadline exceeded.', cancelled: 'Adapter decision was cancelled.', budget: 'Offline adapter permits no spending.' });
 export class ProviderError extends Error {
   constructor(code) { super(messages[code] ?? messages.provider_error); this.name = 'ProviderError'; this.code = code; }
@@ -58,6 +59,7 @@ function decode(result, packet) {
   if (result.status !== 200) fail('provider_error');
   const body = result.body;
   if (bytes(body) > 65536) fail('size');
+  if (body?.model !== undefined && !supportedModel(body.model)) fail('model_mismatch');
   if (body?.status === 'incomplete') fail('incomplete');
   if (body?.status !== 'completed' || !Array.isArray(body.output)) fail('schema');
   const contents = body.output.filter(i => i.type === 'message' && i.role === 'assistant').flatMap(i => i.content ?? []);
@@ -67,13 +69,14 @@ function decode(result, packet) {
   try { choice = JSON.parse(contents[0].text); validateChoice(packet, choice); } catch { fail('schema'); }
   return choice;
 }
+const supportedModel = model => typeof model === 'string' && /^gpt-6-astra(?:-\d{4}-\d{2}-\d{2})?$/.test(model);
 
 /** Inject only a fixture function marked mode='fixture'. Live credentials/transport require a later authorized integration. */
 export function createAstraAdapter({ config = ASTRA_CONFIG, transport, live = false } = {}) {
   if (live !== false) fail('live_disabled');
   const selected = configuration(config);
   if (transport !== undefined && (typeof transport !== 'function' || transport.mode !== 'fixture')) fail('configuration');
-  let receipt = null, pending = false;
+  let receipt = null, active = null, serial = 0, receiptSerial = 0;
   const metadata = freeze({ provider: 'OpenAI', requestedModel: selected.model, resolvedModel: null, modelIdentity: 'alias; live version unverified',
     protocolVersion: 'astra-responses-1', instructionVersion: BRIEF_VERSION, decisionVersion: VERSIONS.decision,
     configuration: selected, mode: 'offline-fixture', liveEnabled: false, availability: transport ? 'fixture-only' : 'unconfigured',
@@ -82,8 +85,8 @@ export function createAstraAdapter({ config = ASTRA_CONFIG, transport, live = fa
     capabilities: freeze({ movementMode: metadata.movementMode, assistance: metadata.assistance, maxCandidates: 800 }),
     get runMetadata() { return metadata; }, get lastReceipt() { return receipt; },
     async decide(packet, { signal } = {}) {
-      if (pending) fail('configuration');
-      pending = true;
+      if (active) fail('configuration');
+      const job = { serial: ++serial }; active = job;
       const abort = new AbortController(), started = performance.now();
       let timer, listener, response, choice, code, attempts = 0;
       try {
@@ -91,9 +94,9 @@ export function createAstraAdapter({ config = ASTRA_CONFIG, transport, live = fa
         if (signal?.aborted) fail('cancelled');
         const request = requestFor(packet, selected);
         const guard = new Promise((_, reject) => {
-          listener = () => { abort.abort(); reject(new ProviderError('cancelled')); };
+          listener = () => { if (active === job) active = null; abort.abort(); reject(new ProviderError('cancelled')); };
           signal?.addEventListener('abort', listener, { once: true });
-          timer = setTimeout(() => { abort.abort(); reject(new ProviderError('timeout')); }, Math.min(selected.timeoutMs, packet.deadlineMs));
+          timer = setTimeout(() => { if (active === job) active = null; abort.abort(); reject(new ProviderError('timeout')); }, Math.min(selected.timeoutMs, packet.deadlineMs));
         });
         try { response = await Promise.race([Promise.resolve().then(() => { attempts++; return transport(request, { signal: abort.signal }); }), guard]); }
         catch (error) { if (error instanceof ProviderError) throw error; fail('transport_ambiguous'); }
@@ -104,16 +107,18 @@ export function createAstraAdapter({ config = ASTRA_CONFIG, transport, live = fa
         code = error instanceof ProviderError ? error.code : 'schema';
         throw new ProviderError(code); // Never propagate transport/provider text into logs or the controller UI.
       } finally {
-        clearTimeout(timer); signal?.removeEventListener('abort', listener); abort.abort(); pending = false;
+        clearTimeout(timer); signal?.removeEventListener('abort', listener); abort.abort(); if (active === job) active = null;
         let responseHash = null;
         try { if (response?.body && bytes(response.body) <= 65536) responseHash = createHash('sha256').update(JSON.stringify(response.body)).digest('hex'); } catch { /* Unserializable response is not retained. */ }
-        receipt = freeze({ requestId: typeof packet?.requestId === 'string' ? packet.requestId : null, metadata,
+        const finished = freeze({ requestId: typeof packet?.requestId === 'string' ? packet.requestId : null, metadata,
           latencyMs: performance.now() - started, outcome: code ? 'provider-error' : 'selected', errorCode: code ?? null,
-          selectedCandidateId: choice?.selectedCandidateId ?? null, reportedModel: /^gpt-6-astra(?:-[a-zA-Z0-9.-]+)?$/.test(response?.body?.model ?? '') ? response.body.model : null,
+          selectedCandidateId: choice?.selectedCandidateId ?? null, reportedModel: supportedModel(response?.body?.model) ? response.body.model : null,
+          reportedModelStatus: response?.body?.model === undefined ? 'not reported' : supportedModel(response.body.model) ? 'compatible reported alias/version; live identity unverified' : 'incompatible; rejected',
           reportedServiceTier: ['default', 'flex', 'priority', 'scale'].includes(response?.body?.service_tier) ? response.body.service_tier : null,
           usage: tokenUsage(response?.body?.usage), usageProvenance: 'fixture response; not measured API usage', actualCostUSD: null,
           responseSha256: responseHash, rawResponseArtifactRef: /^fixture:[A-Za-z0-9_./#-]{1,200}$/.test(response?.artifactRef ?? '') ? response.artifactRef : null,
           rawResponseRetained: false, attempts });
+        if (job.serial >= receiptSerial) { receipt = finished; receiptSerial = job.serial; }
       }
     } });
 }
