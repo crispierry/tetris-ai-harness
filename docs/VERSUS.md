@@ -1,0 +1,17 @@
+# Human versus local algorithm
+
+`/versus.html` adds a focused human board beside the existing local heuristic. Play modes navigation preserves manual solo `/`, solo computer `/harness.html` and algorithm comparison `/comparison.html`. Existing engine, Controller, manual input module and comparison facade are unchanged; only navigation/style links change on existing pages.
+
+Start/Resume focuses the human playfield. Arrows move/soft drop, Up or X rotates, Space hard drops, P pauses/resumes. Keys are bound only to this focused region; modifiers/unrelated typing are ignored. Repeated rotation/drop/pause keys are ignored as in the accepted manual mode. Leaving the region/window or hiding the tab intentionally pauses both. Pause and Resume are separate actions, avoiding a blur-before-click toggle reversal.
+
+The human game uses the accepted pure engine and real gravity. Human clock/input continues while the local algorithm is Choosing or delayed; AI completion cannot mutate the human game. The algorithm owns a separate Controller and 500ms-paced loop, with the existing1500ms deadline. Each game has its own state/RNG/counters and the same private deterministic ordinal piece sequence. Each has a100-piece safety cap; a terminal, capped or failed board stays inspectable while its peer continues. Speeds/assistance differ, so outcomes are descriptive and no winner/fair-race/model-quality claim is made.
+
+Step algorithm performs at most one eligible AI placement, with human time frozen, and leaves the run paused. From initial Ready, human stays Ready. Stop retains both boards; Reset clears the recording and restarts the same private sequence with fresh identities. Lifecycle changes fence pending AI/timers; late replies cannot commit into a replacement/reset/replay session. No live provider, transport, credential or OpenAI activation is included.
+
+Saved visual frames are immutable, allowlisted observations of meaningful pose/lock/status/AI changes, not every animation frame. Replay disables human writes/gravity and makes no new AI decisions. In replay, Step algorithm becomes Next saved frame. Export retains separate human/local policies, counters, outcomes and local decision facts without private seeds/RNG, hidden queue or raw provider text. It is visual inspection, not canonical Node verification.
+
+Recordings are bounded by4000frames and eightMiB UTF-8, including a metadata reserve. Capacity exhaustion stops play honestly and marks incomplete capture; retained records remain available. Reset recovers. Tests may inject trusted local/mock providers; this is not a network sandbox for arbitrary executable test code.
+
+Focused validation: `node --test test/versus.test.mjs test/versus-ui.test.mjs`; full validation: existing `npm test` on requiredNode24.22.1. Meaningful regressions cover engine equivalence, delayed-AI/human-clock independence, terminal isolation, cancellation/immediate new-step races, one-step semantics, focus/key/visibility policy, bounded redacted recording and all four route links. Minimal DOM tests do not establish rendered acceptance; inspect the exact frozen page at desktop/narrow widths, resize, browser-keyboard movement/rotation/drop, independent AI, shared controls, saved replay/export and navigation.
+
+Comparison200% text, separate solo/P8-006200% text and enabled reduced-motion inspection remain explicitly user-Deferred, NOT Passed. Preserve their previous evidence; this iteration does not manufacture accessibility acceptance.

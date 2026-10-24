@@ -1,0 +1,4 @@
+.human-surface{width:100%;min-width:0;outline:none;cursor:pointer;border-radius:3px}.human-surface:focus-visible{outline:3px solid #f4d476;outline-offset:4px}.human-surface .comparison-board{width:100%}
+.versus-help{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:.85rem;color:var(--muted)}.versus-help p{margin:8px 0}.versus-help kbd{font-size:.8rem}
+.versus-shell .comparison-actions .button{flex-basis:120px}.versus-shell .lane-status{overflow-wrap:anywhere}.versus-shell .lane-content{align-items:start}
+@media(max-width:850px){.human-surface{width:min(100%,220px);justify-self:center}}@media(max-width:640px){.human-surface{width:100%}}@media(max-width:360px){.human-surface{width:min(100%,220px)}}
