@@ -107,3 +107,43 @@ export function execute(state, candidate, { sessionId, revision } = {}) {
   if (!locked) throw new Error('Candidate route did not lock');
   return at;
 }
+
+export function features(board) {
+  const heights = [], holesByColumn = [];
+  for (let x = 0; x < RULES.width; x++) {
+    let top = RULES.height, holes = 0;
+    for (let y = 0; y < RULES.height; y++) {
+      if (board[y][x] !== null) top = Math.min(top, y);
+      else if (top < y) holes++;
+    }
+    heights.push(RULES.height - top); holesByColumn.push(holes);
+  }
+  return freeze({ schemaVersion: VERSIONS.features, heights, holesByColumn,
+    aggregateHeight: heights.reduce((a, b) => a + b, 0), maxHeight: Math.max(...heights),
+    holes: holesByColumn.reduce((a, b) => a + b, 0),
+    bumpiness: heights.slice(1).reduce((sum, h, i) => sum + Math.abs(h - heights[i]), 0) });
+}
+function featureDelta(before, after) {
+  return { aggregateHeight: after.aggregateHeight - before.aggregateHeight, maxHeight: after.maxHeight - before.maxHeight,
+    holes: after.holes - before.holes, bumpiness: after.bumpiness - before.bumpiness,
+    heights: after.heights.map((h, x) => h - before.heights[x]) };
+}
+/** Private canonical afterstate: callers MUST use candidateEvidence for provider-visible facts. */
+export function simulate(state, candidate, binding) {
+  const after = execute(state, candidate, binding), placedBoard = state.board.map(row => [...row]);
+  for (const p of candidate.cells) placedBoard[p.y][p.x] = candidate.piece;
+  const clearedRows = placedBoard.flatMap((row, y) => row.every(cell => cell !== null) ? [y] : []);
+  const beforeFeatures = features(state.board), afterFeatures = features(after.board);
+  return freeze({ state: after, placedCells: candidate.cells, clearedRows,
+    linesDelta: after.lines - state.lines, scoreDelta: after.score - state.score,
+    levelDelta: after.level - state.level, terminalReason: after.status === 'over' ? 'blocked spawn' : null,
+    features: afterFeatures, featureDeltas: featureDelta(beforeFeatures, afterFeatures) });
+}
+/** Hypothetical next observation may only reveal the ORIGINAL visible queue, minus its consumed head. */
+export function candidateEvidence(state, candidate, binding) {
+  const simulation = simulate(state, candidate, binding);
+  const afterstate = observe(simulation.state, { ...binding, revision: binding.revision + 1, previewLimit: RULES.previewCount - 1 });
+  return freeze({ ...candidate, afterstate, clearedRows: simulation.clearedRows,
+    linesDelta: simulation.linesDelta, scoreDelta: simulation.scoreDelta, levelDelta: simulation.levelDelta,
+    features: simulation.features, featureDeltas: simulation.featureDeltas });
+}

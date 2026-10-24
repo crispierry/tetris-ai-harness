@@ -97,3 +97,43 @@ test('legal placement which blocks the following spawn is a terminal candidate, 
   state.board[0][4]='J';const c=enumerate(state,binding).find(c=>c.x===0&&c.y===18);
   assert(c);assert.equal(c.terminalReason,'blocked spawn');assert.equal(execute(state,c,binding).status,'over');
 });
+
+test('canonical simulation clears one through four rows, scores pre-clear level and leaves live RNG/state untouched', async () => {
+  const {enumerate,simulate,freeze}=await import('../public/harness.mjs');
+  for(const count of [1,2,3,4]) {
+    const state={...start(createGame()),active:{type:'I',rotation:1,x:3,y:0},board:empty(),lines:9,level:1,score:700};
+    for(let y=20-count;y<20;y++)state.board[y]=Array.from({length:10},(_,x)=>x===5?null:'J');
+    const before=structuredClone(state);freeze(state);
+    const c=enumerate(state,binding).find(c=>c.cells.every(p=>p.x===5)&&c.cells.some(p=>p.y===19));assert(c);
+    const sim=simulate(state,c,binding);
+    assert.deepEqual(sim.state,hardDrop(state));assert.deepEqual(state,before);
+    assert.equal(sim.linesDelta,count);assert.equal(sim.scoreDelta,[0,100,300,500,800][count]);
+    assert.deepEqual(sim.clearedRows,Array.from({length:count},(_,i)=>20-count+i));
+    assert.equal(sim.state.level,2);assert.deepEqual(simulate(state,c,binding),sim);
+  }
+});
+test('height, holes and bumpiness have hand-checkable full-occupancy definitions', async () => {
+  const {features}=await import('../public/harness.mjs');const board=empty();
+  board[18][0]='I';board[17][2]='J';const f=features(board);
+  assert.deepEqual(f.heights,[2,0,3,0,0,0,0,0,0,0]);assert.equal(f.aggregateHeight,5);assert.equal(f.maxHeight,3);
+  assert.deepEqual(f.holesByColumn,[1,0,2,0,0,0,0,0,0,0]);assert.equal(f.holes,3);assert.equal(f.bumpiness,8);
+  assert.deepEqual(features(empty()).heights,Array(10).fill(0));
+});
+test('provider afterstate retains occupancy but cannot reveal newly refilled sixth piece or private RNG', async () => {
+  const {enumerate,candidateEvidence}=await import('../public/harness.mjs');let state=start(createGame(876));
+  for(let n=0;n<20;n++) {
+    const c=enumerate(state,{...binding,revision:n})[0];
+    const evidence=candidateEvidence(state,c,{...binding,revision:n});
+    assert.equal(evidence.afterstate.next.length,4);assert.deepEqual(evidence.afterstate.next,state.queue.slice(1,5));
+    assert.equal(evidence.afterstate.active?.type,state.queue[0]);
+    const serialized=JSON.stringify(evidence);assert(!serialized.includes('"rng"'));assert(!serialized.includes('"seed"'));assert(!serialized.includes('"queue"'));
+    assert.equal(evidence.afterstate.board.length,20);assert.equal(evidence.afterstate.board[0].length,10);
+    state=hardDrop({...state,board:empty()});
+  }
+});
+test('simulation preserves a legal terminal consequence and separates placed from post-clear cells', async () => {
+  const {enumerate,simulate}=await import('../public/harness.mjs');
+  const state={...start(createGame()),active:{type:'O',rotation:0,x:0,y:18},board:empty(),queue:['T','I','O','J','L','S']};state.board[0][4]='J';
+  const c=enumerate(state,binding).find(c=>c.x===0&&c.y===18),sim=simulate(state,c,binding);
+  assert.equal(sim.terminalReason,'blocked spawn');assert.equal(sim.state.status,'over');assert.equal(sim.placedCells.length,4);
+});
