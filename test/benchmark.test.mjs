@@ -116,3 +116,41 @@ test('reducers and replay reject invented terminal caps and fallback attribution
  assert.throws(()=>recomputeRun(artifact.runs[0],noFallback));await assert.rejects(replayRun(noFallback,artifact.runs[0],2));
  const identity=clone(artifact.runs[0]);identity.events[1].provider.name='False primary';assert.throws(()=>recomputeRun(identity,artifact.manifest),/attribution/);
 });
+test('artifact validation rejects events appended after natural game loss and piece-cap exhaustion',async()=>{
+ const first=()=>({...heuristic(),async decide(p){return{requestId:p.requestId,stateRevision:p.stateRevision,selectedCandidateId:p.candidates[0].id};}});
+ const p=[{create:first},{create:first}];
+ for(const cap of [100,2]){
+  const artifact=await runPaired({options:options({maxPieces:cap}),players:p,seeds:[2]});const record=clone(artifact.runs[0]);
+  assert.equal(record.outcome,cap===100?'game-loss':'piece-cap');
+  const observation=record.finalObservation,pieces=record.metrics.pieces;
+  record.events.push({...clone(record.events.at(-1)),index:record.events.length,role:'primary',provider:artifact.manifest.players[0],
+    observationBefore:clone(observation),observationAfter:clone(observation),observationBeforeHash:digest(observation),observationAfterHash:digest(observation),
+    packetHash:null,candidateDigest:null,requestId:null,selectedCandidateId:null,piecesBefore:pieces,piecesAfter:pieces,committed:false,errorCode:'provider_error',consumedPiece:null,latencyMs:0,usage:null,providerReceipt:null});
+  record.lastFailureCode='provider_error';
+  assert.throws(()=>recomputeRun(record,artifact.manifest),/terminal|cap/);await assert.rejects(replayRun(artifact.manifest,record,2),/terminal|cap/);
+ }
+});
+test('aggregation rejects duplicate/out-of-range samples, wrong identities and inconsistent stored metrics',async()=>{
+ const artifact=await runPaired({options:options({maxPieces:2}),players:players(),seeds:[1,2]});
+ assert.throws(()=>aggregatePairs([...artifact.runs.slice(0,2),...artifact.runs.slice(0,2)],artifact.manifest),/Duplicate/);
+ const outside=clone(artifact.runs.slice(0,2));outside.forEach(r=>{r.seedIndex=999;});assert.throws(()=>aggregatePairs(outside,artifact.manifest),/identity/);
+ const stale=clone(artifact.runs);stale[0].metrics.pieces++;assert.throws(()=>aggregatePairs(stale,artifact.manifest),/metric mismatch/);
+ for(const mutate of [r=>{r.sessionId='wrong';},r=>{r.seedReference='wrong';},r=>{r.events[0].consumedPiece=r.events[0].consumedPiece==='I'?'Z':'I';},r=>{r.lastFailureCode='budget';},
+  r=>{r.events[0].observationAfter.score=-1;},r=>{r.events[0].observationAfter.level=Infinity;}]){
+  const r=clone(artifact.runs[0]);mutate(r);assert.throws(()=>recomputeRun(r,artifact.manifest));await assert.rejects(replayRun(artifact.manifest,r,1));
+ }
+ const partial=aggregatePairs(artifact.runs.slice(0,2),artifact.manifest);assert.equal(partial.sampleCount,1);assert.equal(partial.expectedSampleCount,2);assert.deepEqual(partial.missingSeedIndices,[1]);assert.equal(partial.completeSampleSet,false);
+ let factories=0;assert.throws(()=>preflight(options(),[{create:()=>{factories++;return heuristic();}},{create:()=>{factories++;return heuristic();}}],[1,1]),/Unique/);assert.equal(factories,0);
+});
+test('all artifact entry points reject incompatible manifests and invalid JSON hashing values',async()=>{
+ const artifact=await runPaired({options:options({maxPieces:2}),players:players(),seeds:[3]});
+ for(const change of [{version:'old'},{codeVersion:'old'},{rulesVersion:'old'},{promptVersion:'old'},{schemas:{...artifact.manifest.schemas,features:99}},{hold:true},{live:true},{budgetUSD:1},{maxPieces:0},{seedCount:9},{deadlineMs:NaN},{sourceRevision:'unset'}]){
+  const m={...artifact.manifest,...change};assert.throws(()=>recomputeRun(artifact.runs[0],m));assert.throws(()=>aggregatePairs(artifact.runs,m));await assert.rejects(replayRun(m,artifact.runs[0],3));
+ }
+ for(const value of [new Date(),new Map(),new Set(),new Number(1),new Array(2)])assert.throws(()=>stableJSON(value));
+ const extra=[1];extra.extra='not JSON';assert.throws(()=>stableJSON(extra));
+ const overflow=clone(artifact.runs[0]);overflow.events.forEach(e=>{e.usage={total_tokens:Number.MAX_SAFE_INTEGER};});assert.throws(()=>recomputeRun(overflow,artifact.manifest),/usage/);
+ const failed=await runPaired({options:options({maxPieces:2}),players:[{create:()=>mockProvider({mode:'error',delayMs:0})},{create:()=>heuristic()}],seeds:[3]});
+ const changed=clone(failed.runs[0]);changed.events[0].observationAfter.score=100;changed.events[0].observationAfterHash=digest(changed.events[0].observationAfter);changed.finalObservation=changed.events[0].observationAfter;
+ assert.throws(()=>recomputeRun(changed,failed.manifest),/Failed attempt/);
+});
