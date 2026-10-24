@@ -8,11 +8,12 @@ const size = value => Buffer.byteLength(JSON.stringify(value));
 const definitions = freeze({
   decisions: { provider: 'OpenAI Decisions', model: 'gpt-6-luna', endpoint: 'https://api.openai.com/v1/decisions', documentedMaxCandidates: 255,
     confidenceMeaning: 'Provider Choice confidence, separate from its option distribution; not a win probability or calibrated game value.' },
-  jev: { provider: 'TypeSafe Jev', model: 'jev-latest', endpoint: 'https://api.typesafe.ai/v1/systemone', documentedMaxCandidates: null,
+  jev: { provider: 'TypeSafe Jev', model: 'jev-latest', endpoint: 'https://api.typesafe.ai/v1/systemone', documentedMaxCandidates: 255,
     confidenceMeaning: 'Provider distribution-concentration confidence; not a win probability or calibrated game value.' }
 });
 export function choiceCapabilities(protocol) {
-  const d = definitions[protocol]; if (!d) fail('configuration');
+  if (typeof protocol !== 'string' || !Object.hasOwn(definitions, protocol)) fail('configuration');
+  const d = definitions[protocol];
   return freeze({ ...d, discovery: 'official documentation and offline fixtures; no authenticated model discovery',
     liveAvailability: 'unknown', resolvedModel: null, fixtureMaxCandidates: 255, maxInputBytes: 1048576,
     reasoningEffort: 'not configured: unsupported by this Choice request contract', serviceTier: 'not configured: unsupported by this Choice request contract' });

@@ -33,7 +33,7 @@ for (const protocol of ['decisions', 'jev']) {
     } else {
       assert.equal(request.url, 'https://api.typesafe.ai/v1/systemone'); assert.equal(request.body.model, 'jev-latest');
       assert.deepEqual(Object.values(request.body.questions.placement.criteria), packet.candidates);
-      assert.equal(adapter.runMetadata.documentedMaxCandidates, null); assert.equal(adapter.runMetadata.fixtureMaxCandidates, 255);
+      assert.equal(adapter.runMetadata.documentedMaxCandidates, 255); assert.equal(adapter.runMetadata.fixtureMaxCandidates, 255);
     }
     assert(Object.isFrozen(adapter.lastReceipt));
   });
@@ -96,4 +96,15 @@ test('Astra, Decisions and Jev receive identical semantic evidence; none gets ex
   assert.deepEqual(astra, decisions); assert.deepEqual(decisions, jev);
   assert.equal(choiceCapabilities('decisions').documentedMaxCandidates, 255);
   assert.throws(() => choiceCapabilities('other'), e => e.code === 'configuration');
+});
+test('both exported factories reject inherited protocol names and nonstring coercion before dispatch', () => {
+  let calls = 0;
+  const transport = fixture(() => { calls++; throw new Error('must not dispatch'); });
+  for (const protocol of ['toString', '__proto__', 'constructor', 'hasOwnProperty', 'valueOf', '', null, undefined, 1, {}, ['jev'], new String('jev')]) {
+    assert.throws(() => choiceCapabilities(protocol), e => e.code === 'configuration');
+    assert.throws(() => createChoiceAdapter({ protocol, transport }), e => e.code === 'configuration');
+  }
+  assert.equal(calls, 0);
+  assert.equal(choiceCapabilities('jev').documentedMaxCandidates, 255);
+  assert.equal(choiceCapabilities('jev').liveAvailability, 'unknown');
 });
