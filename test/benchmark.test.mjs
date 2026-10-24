@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runPaired, replayRun, recomputeRun, aggregatePairs, preflight, stableJSON, digest } from '../benchmark.mjs';
 import { heuristic, mockProvider } from '../public/controller.mjs';
+import { ProviderError } from '../providers.mjs';
 const sourceRevision='f90ec403f7a3e48b9485003a5140fe8f9a65c7e7';
 const options=extra=>({runId:'paired-test',sourceRevision,maxPieces:12,deadlineMs:100,runWallMs:10000,...extra});
 const players=()=>[{create:()=>heuristic()},{create:()=>mockProvider({mode:'delay',delayMs:0})}];
@@ -12,10 +13,10 @@ test('paired runs isolate games/providers, preserve ordinal sequences across del
  assert.equal(artifact.manifest.objective,'endless score and survival');assert.equal(artifact.manifest.hold,false);
  for(const run of artifact.runs){
   assert.equal(run.outcome,'piece-cap');assert.equal(run.metrics.pieces,12);assert.equal(run.metrics.censored,true);
-  assert.deepEqual(recomputeRun(clone(run)),run.metrics);assert.equal(run.metrics.winner,null);assert.equal(run.metrics.actualCostUSD,null);
+  assert.deepEqual(recomputeRun(clone(run),artifact.manifest),run.metrics);assert.equal(run.metrics.winner,null);assert.equal(run.metrics.actualCostUSD,null);
   for(const event of run.events){assert.equal(event.piecesAfter-event.piecesBefore,1);assert.equal(event.observationAfter.next.length,5);assert.equal(event.packetHash.length,64);}
  }
- assert.deepEqual(aggregatePairs(clone(artifact.runs)),artifact.aggregate);
+ assert.deepEqual(aggregatePairs(clone(artifact.runs),artifact.manifest),artifact.aggregate);
  const a=artifact.runs[0],b=artifact.runs[1];assert.notEqual(a.sessionId,b.sessionId);assert.deepEqual(a.metrics.consumedSequence,b.metrics.consumedSequence);
  const {artifactHash,...content}=artifact;assert.equal(artifactHash,digest(content));
  const text=JSON.stringify(artifact);for(const field of ['"seed":','"seeds":','"rng":','"queue":','"apiKey":','"authorization":'])assert(!text.includes(field),field);
@@ -88,4 +89,30 @@ test('per-decision fixture metadata and usage belong to the current request and 
  const artifact=await runPaired({options:options({maxPieces:2}),players:[{create},{create}],seeds:[2]});
  for(const run of artifact.runs){assert.equal(run.metrics.fixtureUsage.total_tokens,24);for(const e of run.events){assert.equal(e.providerReceipt.reportedModel,'gpt-6-luna');assert.equal(e.providerReceipt.responseSha256,'a'.repeat(64));}}
  assert(!JSON.stringify(artifact).includes('secret-sentinel'));
+});
+test('synchronous decisions past the per-move deadline never commit or receive fallback',async()=>{
+ const create=()=>({...heuristic(),async decide(packet){const end=performance.now()+20;while(performance.now()<end){}return{requestId:packet.requestId,stateRevision:packet.stateRevision,selectedCandidateId:packet.candidates[0].id};}});
+ const artifact=await runPaired({options:options({maxPieces:1,deadlineMs:1,runWallMs:1000,fallback:'local-heuristic-explicit'}),players:[{create},{create}],seeds:[2]});
+ for(const run of artifact.runs){assert.equal(run.metrics.pieces,0);assert.equal(run.outcome,'decision-timeout');assert.equal(run.events[0].errorCode,'timeout');assert.equal(run.metrics.assistedPlacements,0);assert((await replayRun(artifact.manifest,run,2)).verified);}
+});
+test('typed timeout, cancelled and budget errors survive the controller boundary and never fallback',async()=>{
+ for(const [code,outcome] of [['timeout','decision-timeout'],['cancelled','cancelled'],['budget','budget-stop']]){
+  const create=()=>({...heuristic(),async decide(){throw new ProviderError(code);}});
+  const artifact=await runPaired({options:options({fallback:'local-heuristic-explicit'}),players:[{create},{create}],seeds:[2]});
+  for(const run of artifact.runs){assert.equal(run.outcome,outcome);assert.equal(run.events[0].errorCode,code);assert.equal(run.metrics.pieces,0);assert.equal(run.metrics.assistedPlacements,0);assert((await replayRun(artifact.manifest,run,2)).verified);}
+ }
+});
+test('reducers and replay reject invented terminal caps and fallback attribution/policy changes',async()=>{
+ const bad=[{create:()=>mockProvider({mode:'error',delayMs:0})},{create:()=>heuristic()}];
+ const plain=await runPaired({options:options(),players:bad,seeds:[2]});
+ for(const outcome of ['event-cap','cancelled','run-deadline','decision-timeout','budget-stop']){
+  const r=clone(plain.runs[0]);r.outcome=outcome;
+  assert.throws(()=>recomputeRun(r,plain.manifest));await assert.rejects(replayRun(plain.manifest,r,2));
+ }
+ const artifact=await runPaired({options:options({maxPieces:1,fallback:'local-heuristic-explicit'}),players:bad,seeds:[2]});
+ const changed=clone(artifact.runs[0]);changed.events[1].role='primary';changed.events[1].provider=artifact.manifest.players[0];
+ assert.throws(()=>recomputeRun(changed,artifact.manifest),/attribution/);await assert.rejects(replayRun(artifact.manifest,changed,2),/attribution/);
+ const noFallback={...artifact.manifest,fallback:'none'};
+ assert.throws(()=>recomputeRun(artifact.runs[0],noFallback));await assert.rejects(replayRun(noFallback,artifact.runs[0],2));
+ const identity=clone(artifact.runs[0]);identity.events[1].provider.name='False primary';assert.throws(()=>recomputeRun(identity,artifact.manifest),/attribution/);
 });

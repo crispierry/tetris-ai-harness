@@ -80,16 +80,20 @@ const failureOf = (provider, view, requestId) => requestId && provider.lastRecei
   view.error === 'Decision deadline exceeded' ? 'timeout' : view.error === 'Cancelled' ? 'cancelled' : view.error === 'Invalid, stale or unknown decision' ? 'schema' : 'provider_error';
 async function runSingle(manifest, seed, seedIndex, lane, primary, signal) {
   const sessionId = `${manifest.runId}-${seedIndex}-${lane}`;
-  let selected = primary, role = 'primary', input = null, wallExpired = false;
+  let selected = primary, role = 'primary', input = null, wallExpired = false, boundaryErrorCode = null;
   const fallback = heuristic();
   const wrap = provider => ({ name: provider.name, kind: provider.kind, version: provider.version, capabilities: provider.capabilities,
     async decide(packet, context) {
       input = packet;
+      const decisionStarted=performance.now();
       const expired = () => performance.now()-started >= manifest.runWallMs;
       if(expired()) { wallExpired=true; controller.stop(); throw new ProviderError('timeout'); }
-      const result=await provider.decide(packet,context);
+      let result;
+      try { result=await provider.decide(packet,context); }
+      catch(error) { if(error instanceof ProviderError && errorCodes.has(error.code))boundaryErrorCode=error.code; throw error; }
       // Timers cannot preempt synchronous provider code; discard results that return past the wall bound.
       if(expired()) { wallExpired=true; controller.stop(); throw new ProviderError('timeout'); }
+      if(performance.now()-decisionStarted>=packet.deadlineMs) { boundaryErrorCode='timeout'; throw new ProviderError('timeout'); }
       return result;
     } });
   const controller = new Controller({ seed, sessionId, provider: wrap(primary), deadlineMs: manifest.deadlineMs });
@@ -102,9 +106,9 @@ async function runSingle(manifest, seed, seedIndex, lane, primary, signal) {
       if (signal?.aborted) { outcome = 'cancelled'; break; }
       if (wallExpired || performance.now()-started >= manifest.runWallMs) { outcome = 'run-deadline'; break; }
       if (events.length >= manifest.maxEvents) { outcome = 'event-cap'; break; }
-      const before = controller.view; input = null; const stepStarted = performance.now();
+      const before = controller.view; input = null; boundaryErrorCode=null; const stepStarted = performance.now();
       const decision = await controller.step(); const after = controller.view;
-      const errorCode = decision ? null : signal?.aborted ? 'cancelled' : wallExpired ? 'timeout' : failureOf(selected,after,input?.requestId);
+      const errorCode = decision ? null : signal?.aborted ? 'cancelled' : wallExpired ? 'timeout' : boundaryErrorCode ?? failureOf(selected,after,input?.requestId);
       if(errorCode)lastFailureCode=errorCode;
       const event = freeze({ index: events.length, role, provider: role === 'primary' ? manifest.players[lane] : identity(fallback),
         observationBefore: before.observation, observationAfter: after.observation,
@@ -116,9 +120,12 @@ async function runSingle(manifest, seed, seedIndex, lane, primary, signal) {
         providerReceipt:receiptOf(selected,input?.requestId), usage: usageOf(selected,input?.requestId), usageProvenance: selected.kind === 'mock' ? 'fixture-reported; not actual API usage' : 'local; no provider usage', actualCostUSD: null });
       events.push(event);
       if (after.status === 'over') outcome = 'game-loss';
+      else if (after.pieces >= manifest.maxPieces) outcome = 'piece-cap';
       else if (signal?.aborted) outcome = 'cancelled';
       else if (wallExpired || performance.now()-started >= manifest.runWallMs) outcome = 'run-deadline';
-      else if (after.pieces >= manifest.maxPieces) outcome = 'piece-cap';
+      else if(errorCode==='cancelled')outcome='cancelled';
+      else if(errorCode==='timeout')outcome='decision-timeout';
+      else if(errorCode==='budget')outcome='budget-stop';
       else if (!decision) {
         if (manifest.fallback === 'local-heuristic-explicit' && role === 'primary' && !['cancelled','timeout','budget'].includes(errorCode)) {
           selected = fallback; role = 'fallback'; controller.setProvider(wrap(fallback));
@@ -128,37 +135,54 @@ async function runSingle(manifest, seed, seedIndex, lane, primary, signal) {
   } finally { clearTimeout(timer); signal?.removeEventListener('abort',cancel); controller.stop(); }
   const record = { version: BENCHMARK_VERSION, seedIndex, seedReference: `${manifest.seedSetReference}/${seedIndex}`, lane, sessionId,
     initialObservation, events, finalObservation: controller.view.observation, outcome, lastFailureCode,
+    control:{signalAborted:signal?.aborted===true,wallTimerExpired:wallExpired,wallDeadlineReached:wallExpired||performance.now()-started>=manifest.runWallMs},
     elapsedMs: performance.now()-started, timingProvenance:'measured local wall time; replay does not reproduce latency', metrics: null };
-  record.metrics = recomputeRun(record);
+  record.metrics = recomputeRun(record,manifest);
   return freeze(record);
 }
 const quantile = (values,q) => values.length ? [...values].sort((a,b)=>a-b)[Math.ceil(q*values.length)-1] : null;
-export function recomputeRun(record) {
-  assert(record?.version === BENCHMARK_VERSION && Array.isArray(record.events) && ['game-loss','piece-cap','event-cap','cancelled','run-deadline','provider-error'].includes(record.outcome), 'Unsupported run artifact');
+export function recomputeRun(record,manifest) {
+  assert(record?.version === BENCHMARK_VERSION && manifest?.version===BENCHMARK_VERSION && Array.isArray(record.events) &&
+    ['game-loss','piece-cap','event-cap','cancelled','run-deadline','decision-timeout','budget-stop','provider-error'].includes(record.outcome), 'Unsupported run artifact');
+  assert([0,1].includes(record.lane) && manifest.players?.length===2 && ['none','local-heuristic-explicit'].includes(manifest.fallback),'Invalid run policy');
   let observation = record.initialObservation, pieces = 0, failures = 0, assisted = 0; const sequence = [], latencies = [], usage = {}, errorCounts={};
+  let expectedRole='primary';const fallbackIdentity=identity(heuristic());
   record.events.forEach((event,index) => {
+    assert(event.role===expectedRole && stableJSON(event.provider)===stableJSON(event.role==='primary'?manifest.players[record.lane]:fallbackIdentity),'Fallback role/provider attribution mismatch');
     assert(event.index === index && event.observationBeforeHash === digest(event.observationBefore) && event.observationAfterHash === digest(event.observationAfter) &&
       digest(observation) === event.observationBeforeHash, 'Broken observation chain');
     assert(event.piecesBefore === pieces && event.piecesAfter === pieces + (event.committed ? 1 : 0), 'Inconsistent placement counter');
     assert(typeof event.committed === 'boolean' && Number.isFinite(event.latencyMs) && event.latencyMs >= 0 && ['primary','fallback'].includes(event.role), 'Invalid event metric');
     if (event.committed) { assert(typeof event.selectedCandidateId === 'string' && RULES.types.includes(event.consumedPiece) && !event.errorCode,'Invalid committed event'); pieces++; sequence.push(event.consumedPiece); if(event.role==='fallback') assisted++; }
     else { assert(!event.selectedCandidateId && errorCodes.has(event.errorCode),'Invalid failed event'); failures++;errorCounts[event.errorCode]=(errorCounts[event.errorCode]??0)+1; }
+    expectedRole=event.committed?'primary':event.role==='primary'&&manifest.fallback==='local-heuristic-explicit'&&!['cancelled','timeout','budget'].includes(event.errorCode)?'fallback':'terminal';
+    if(expectedRole==='terminal')assert(index===record.events.length-1,'Decision after terminal provider stop');
     assert(event.observationAfter.lines >= observation.lines && event.observationAfter.score >= observation.score,'Nonmonotonic game metric');
     for (const [key,value] of Object.entries(event.usage??{})) { assert(['input_tokens','output_tokens','total_tokens'].includes(key) && Number.isSafeInteger(value) && value>=0,'Invalid fixture usage'); usage[key]=(usage[key]??0)+value; }
     observation=event.observationAfter; latencies.push(event.latencyMs);
   });
   assert(digest(observation)===digest(record.finalObservation),'Final observation mismatch');
   assert(Number.isFinite(record.elapsedMs) && record.elapsedMs>=0,'Invalid elapsed time');
+  const last=record.events.at(-1),over=record.finalObservation.status==='over';
+  if(over)assert(record.outcome==='game-loss'&&record.finalObservation.terminalReason==='blocked spawn','Top-out terminal precedence mismatch');
+  else if(pieces>=manifest.maxPieces)assert(record.outcome==='piece-cap','Cap terminal precedence mismatch');
+  else if(record.outcome==='event-cap')assert(record.events.length>=manifest.maxEvents,'Event cap not exhausted');
+  else if(record.outcome==='cancelled')assert(record.control?.signalAborted===true||last?.errorCode==='cancelled','Cancellation evidence absent');
+  else if(record.outcome==='run-deadline')assert(record.control?.wallDeadlineReached===true&&(record.control.wallTimerExpired===true||record.elapsedMs>=manifest.runWallMs),'Run deadline evidence absent');
+  else if(record.outcome==='decision-timeout')assert(last&&!last.committed&&last.errorCode==='timeout','Decision timeout evidence absent');
+  else if(record.outcome==='budget-stop')assert(last&&!last.committed&&last.errorCode==='budget','Budget stop evidence absent');
+  else if(record.outcome==='provider-error')assert(last&&!last.committed&&!['cancelled','timeout','budget'].includes(last.errorCode)&&expectedRole==='terminal','Provider failure/fallback sequence mismatch');
+  else throw new Error('Unsupported terminal claim');
   return freeze({ pieces,lines:observation.lines,score:observation.score,level:observation.level,failures,errorCounts,invalidOrStaleDecisions:errorCounts.schema??0,assistedPlacements:assisted,
     outcome:record.outcome,censored:['piece-cap','event-cap'].includes(record.outcome),consumedSequence:sequence,
     latency:{count:latencies.length,p50Ms:quantile(latencies,.5),p95Ms:quantile(latencies,.95)},elapsedMs:record.elapsedMs,
     fixtureUsage:Object.keys(usage).length?usage:null,actualCostUSD:null, costStatus:'unknown/not measured; no live requests',winner:null });
 }
-export function aggregatePairs(runs) {
+export function aggregatePairs(runs,manifest) {
   assert(Array.isArray(runs) && runs.length%2===0,'Complete paired runs required');
   const pairs=[];
   for(let i=0;i<runs.length;i+=2){const a=runs[i],b=runs[i+1];assert(a.seedIndex===b.seedIndex&&a.lane===0&&b.lane===1,'Invalid pair ordering');
-    const x=recomputeRun(a),y=recomputeRun(b), common=Math.min(x.consumedSequence.length,y.consumedSequence.length);
+    const x=recomputeRun(a,manifest),y=recomputeRun(b,manifest), common=Math.min(x.consumedSequence.length,y.consumedSequence.length);
     assert(x.consumedSequence.slice(0,common).join()===y.consumedSequence.slice(0,common).join(),'Ordinal piece sequence diverged');
     pairs.push({seedIndex:a.seedIndex,scoreDifference:x.score-y.score,linesDifference:x.lines-y.lines,piecesDifference:x.pieces-y.pieces,
       outcomes:[x.outcome,y.outcome],censored:[x.censored,y.censored],assisted:[x.assistedPlacements,y.assistedPlacements],failures:[x.failures,y.failures]});}
@@ -174,7 +198,7 @@ export async function runPaired({ options, players, seeds, signal } = {}) {
     assert(Buffer.byteLength(stableJSON({manifest,runs}))<=manifest.maxArtifactBytes,'Artifact byte cap exceeded');
   }
   const pairedRuns=runs.length%2?runs.slice(0,-1):runs;
-  const artifact={manifest,runs,aggregate:aggregatePairs(pairedRuns),partial: runs.length!==seeds.length*2};
+  const artifact={manifest,runs,aggregate:aggregatePairs(pairedRuns,manifest),partial: runs.length!==seeds.length*2};
   return freeze({...artifact,artifactHash:digest(artifact)});
 }
 export async function replayRun(manifest, record, privateSeed) {
@@ -185,7 +209,7 @@ export async function replayRun(manifest, record, privateSeed) {
     Number.isInteger(privateSeed) && privateSeed>0 && privateSeed<=0xffffffff && Array.isArray(manifest.players) && manifest.players.length===2 &&
     manifest.players.every(p=>['local','mock'].includes(p.kind)) && Number.isInteger(record.seedIndex) && record.seedIndex>=0 && record.seedIndex<manifest.seedCount &&
     [0,1].includes(record.lane) && record.sessionId===`${manifest.runId}-${record.seedIndex}-${record.lane}`,'Incompatible replay manifest');
-  const recomputed=recomputeRun(record);assert(stableJSON(recomputed)===stableJSON(record.metrics),'Saved metric mismatch');
+  const recomputed=recomputeRun(record,manifest);assert(stableJSON(recomputed)===stableJSON(record.metrics),'Saved metric mismatch');
   let current, replayMismatch;
   const replayProvider={...manifest.players[record.lane],async decide(packet){
     if(!(current && digest(packet)===current.packetHash && digest(packet.candidates)===current.candidateDigest && packet.requestId===current.requestId)) {
@@ -207,7 +231,7 @@ export async function replayRun(manifest, record, privateSeed) {
   assert(digest(controller.view.observation)===digest(record.finalObservation),'Replay terminal observation mismatch');
   if(over)assert(record.outcome==='game-loss','Top-out terminal precedence mismatch');
   else if(controller.view.pieces>=manifest.maxPieces)assert(record.outcome==='piece-cap','Cap terminal precedence mismatch');
-  else assert(['cancelled','run-deadline','provider-error','event-cap'].includes(record.outcome),'Unsupported terminal claim');
+  else assert(['cancelled','run-deadline','decision-timeout','budget-stop','provider-error','event-cap'].includes(record.outcome),'Unsupported terminal claim');
   controller.stop();
   return freeze({verified:true,observationHash:digest(record.finalObservation),outcome:record.outcome,metrics:recomputed,
     providerCalls:0,latencyReproduced:false,hashScope:'public observation and packet, not private engine/RNG state'});
