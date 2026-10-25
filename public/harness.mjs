@@ -1,6 +1,6 @@
 import { RULES, terminalReason, cells, move, rotate, softDrop, hardDrop } from './engine.mjs';
 
-export const VERSIONS = Object.freeze({ observation: 2, candidate: 2, features: 1, decision: 2 });
+export const VERSIONS = Object.freeze({ observation: 2, candidate: 2, features: 1, decision: 3 });
 export function freeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.values(value).forEach(freeze); Object.freeze(value);

@@ -2,8 +2,12 @@
 import { createHash } from 'node:crypto';
 import { ProviderError } from './providers.mjs';
 import { freeze, VERSIONS } from './public/harness.mjs';
-import { BRIEF_VERSION, validatePacket, validateChoice } from './public/briefing.mjs';
-const fail = code => { throw new ProviderError(code); };
+import { BRIEF_VERSION, validatePacket, validateChoice, semanticPacket } from './public/briefing.mjs';
+const fail = code => {
+  const error = new ProviderError(code);
+  if (code === 'unsupported_candidates') error.message = 'Complete legal candidate set exceeds the supported Choice option limit.';
+  throw error;
+};
 const size = value => Buffer.byteLength(JSON.stringify(value));
 const definitions = freeze({
   decisions: { provider: 'OpenAI Decisions', model: 'gpt-6-luna', endpoint: 'https://api.openai.com/v1/decisions', documentedMaxCandidates: 255,
@@ -16,19 +20,23 @@ export function choiceCapabilities(protocol) {
   const d = definitions[protocol];
   return freeze({ ...d, discovery: 'official documentation and offline fixtures; no authenticated model discovery',
     liveAvailability: 'unknown', resolvedModel: null, fixtureMaxCandidates: 255, maxInputBytes: 1048576,
+    inputLimitMeaning: 'Application UTF-8 byte bound on both the controller packet and serialized request body; not a token/context estimate.', maxResponseBytes: 65536,
     reasoningEffort: 'not configured: unsupported by this Choice request contract', serviceTier: 'not configured: unsupported by this Choice request contract' });
 }
 function packetCheck(packet, config) {
   try { validatePacket(packet); } catch { fail('input'); }
   if (packet?.schemaVersion !== VERSIONS.decision || packet.rulesBrief?.version !== BRIEF_VERSION ||
       !Number.isInteger(packet.deadlineMs) || packet.deadlineMs < 1 || !packet.candidates?.length ||
-      packet.candidates.length > config.maxCandidates || size(packet) > config.maxInputBytes ||
+      size(packet) > config.maxInputBytes ||
       new Set(packet.candidates.map(c => c.id)).size !== packet.candidates.length) fail('input');
+  if (packet.candidates.length > config.maxCandidates) fail('unsupported_candidates');
 }
 function requestFor(protocol, packet, config) {
-  const ids = packet.candidates.map(c => c.id), instructions = 'Choose one legal placement ID using the complete rules, objective and consequences in the supplied public packet.';
+  const ids = packet.candidates.map(c => c.id), instructions = protocol === 'decisions'
+    ? 'Select exactly one supplied current legal placement ID as the native placement Choice answer. Use the complete rules, objective and immediate consequences in the public packet; replan on the next turn.'
+    : 'Choose one legal placement ID using the complete rules, objective and consequences in the supplied public packet.';
   return freeze({ method: 'POST', url: definitions[protocol].endpoint, body: protocol === 'decisions' ? {
-    model: config.model, input: JSON.stringify(packet), questions: [{ type: 'choice', name: 'placement', instructions,
+    model: config.model, input: JSON.stringify(semanticPacket(packet)), questions: [{ type: 'choice', name: 'placement', instructions,
       choices: ids.map(value => ({ value, description: 'Legal placement; exact path and consequences are in the input packet.' })) }]
   } : { model: config.model, state: packet, questions: { placement: { type: 'choice', instructions,
     criteria: Object.fromEntries(packet.candidates.map(c => [c.id, c])) } } } });
@@ -42,7 +50,7 @@ function parse(protocol, result, packet) {
   if (result.status === 404) fail('unavailable'); if (result.status === 429) fail('rate_limit');
   if (result.status >= 500) fail('transport_ambiguous'); if (result.status !== 200) fail('provider_error');
   const body = result.body; if (size(body) > 65536) fail('size');
-  if (body?.model !== undefined && !compatible(protocol, body.model)) fail('model_mismatch');
+  if ((protocol === 'decisions' || body?.model !== undefined) && !compatible(protocol, body?.model)) fail('model_mismatch');
   let answer;
   if (protocol === 'decisions') {
     if (!Array.isArray(body?.answers) || body.answers.length !== 1 || body.answers[0].name !== 'placement') fail('schema');
@@ -79,20 +87,20 @@ export function createChoiceAdapter({ protocol, config: overrides = {}, transpor
   if (config.spendCapUSD !== 0) fail('budget');
   if (transport !== undefined && (typeof transport !== 'function' || transport.mode !== 'fixture')) fail('configuration');
   freeze(config);
-  const metadata = freeze({ ...capabilities, configuration: config, protocolVersion: `${protocol}-choice-1`, instructionVersion: BRIEF_VERSION,
+  const metadata = freeze({ ...capabilities, configuration: config, protocolVersion: `${protocol}-choice-${protocol === 'decisions' ? 2 : 1}`, instructionVersion: BRIEF_VERSION,
     decisionVersion: VERSIONS.decision, mode: 'offline-fixture', liveEnabled: false, availability: transport ? 'fixture-only' : 'unconfigured',
     assistance: 'canonical-afterstates-v1; complete offered set, no pruning or cross-batch ranking', actualCostUSD: null });
   let active = null, serial = 0, receiptSerial = 0, receipt = null;
-  return Object.freeze({ name: `${definition.provider} (offline fixture)`, kind: 'mock', version: `${protocol}-choice-1`,
+  return Object.freeze({ name: `${definition.provider} (offline fixture)`, kind: 'mock', version: `${protocol}-choice-${protocol === 'decisions' ? 2 : 1}`,
     capabilities: freeze({ maxCandidates: config.maxCandidates, movementMode: 'reachable-paused-gravity-v1', assistance: 'canonical-afterstates-v1' }),
     get runMetadata() { return metadata; }, get lastReceipt() { return receipt; },
     async decide(packet, { signal } = {}) {
       if (active) fail('configuration');
       const job = { serial: ++serial }; active = job;
       const abort = new AbortController(), started = performance.now();
-      let timer, listener, response, parsed, code, attempts = 0, deadline = Infinity;
+      let timer, listener, response, parsed, code, requestBodyBytes = null, packetBytes = null, attempts = 0, deadline = Infinity;
       try {
-        packetCheck(packet, config); if (signal?.aborted) fail('cancelled');
+        packetCheck(packet, config); packetBytes = size(packet); if (signal?.aborted) fail('cancelled');
         deadline = started + Math.min(config.timeoutMs, packet.deadlineMs);
         const current = () => {
           if (abort.signal.aborted || signal?.aborted) fail('cancelled');
@@ -103,8 +111,10 @@ export function createChoiceAdapter({ protocol, config: overrides = {}, transpor
         if (packet.candidates.length === 1) {
           decoded = { choice: { requestId: packet.requestId, stateRevision: packet.stateRevision, selectedCandidateId: packet.candidates[0].id }, distribution: null, confidence: null };
         } else {
-          if (!transport) fail('unavailable');
           const request = requestFor(protocol, packet, config);
+          requestBodyBytes = size(request.body);
+          if (requestBodyBytes > config.maxInputBytes) fail('input');
+          if (!transport) fail('unavailable');
           const guard = new Promise((_, reject) => {
             listener = () => { if (active === job) active = null; abort.abort(); reject(new ProviderError('cancelled')); };
             signal?.addEventListener('abort', listener, { once: true });
@@ -122,7 +132,7 @@ export function createChoiceAdapter({ protocol, config: overrides = {}, transpor
         let responseSha256 = null;
         try { if (response?.body && size(response.body) <= 65536) responseSha256 = createHash('sha256').update(JSON.stringify(response.body)).digest('hex'); } catch { /* No raw body is retained. */ }
         const usage = {}; for (const key of ['input_tokens', 'output_tokens', 'total_tokens']) if (Number.isSafeInteger(response?.body?.usage?.[key]) && response.body.usage[key] >= 0) usage[key] = response.body.usage[key];
-        let finished = freeze({ metadata, requestId: typeof packet?.requestId === 'string' ? packet.requestId : null, attempts,
+        let finished = freeze({ metadata, packetBytes, requestBodyBytes, requestId: typeof packet?.requestId === 'string' ? packet.requestId : null, attempts,
           outcome: code ? 'provider-error' : attempts ? 'selected' : 'single-legal-candidate; no provider decision', errorCode: code ?? null,
           latencyMs: performance.now() - started, selectedCandidateId: parsed?.choice.selectedCandidateId ?? null,
           choiceDistribution: parsed?.distribution ?? null, confidence: parsed?.confidence ?? null, confidenceMeaning: definition.confidenceMeaning,
