@@ -19,13 +19,25 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch } = {
     get lastReceipt() { return receipt; },
     async decide(packet,{signal}={}) {
       const suffix = packet?.observation?.sessionId?.slice(base.length+1), nextEpoch=Number(suffix);
-      if (packet?.observation?.sessionId !== `${base}-${nextEpoch}` || !Number.isInteger(nextEpoch) || nextEpoch < epoch || nextEpoch > epoch+1) fail('epoch');
+      if (packet?.observation?.sessionId !== `${base}-${nextEpoch}` || !Number.isSafeInteger(nextEpoch) || nextEpoch < epoch || nextEpoch < 0 || nextEpoch >= 100) fail('epoch');
       if (active && !active.signal?.aborted) fail('overlap');
       const job={id:++serial,signal}; active=job;
       const current=()=>{if (signal?.aborted || active!==job) fail('cancelled');};
       try {
         current();
-        if (nextEpoch !== epoch) { await post('/decision/control',{action:'advanceEpoch',epoch:nextEpoch},signal); current(); epoch=nextEpoch; }
+        // Reconcile only control identity, never retry a decision or an ambiguous advance.
+        // A lost advance reply can leave the durable server ahead of this closure.
+        const durable = await post('/decision/control',{action:'currentEpoch'},signal); current();
+        if (!Number.isInteger(durable.maxEpochs) || durable.maxEpochs < 1 || durable.maxEpochs > 100 ||
+            !Number.isInteger(durable.epoch) || durable.epoch < epoch || durable.epoch > nextEpoch || nextEpoch >= durable.maxEpochs) fail('epoch');
+        epoch = durable.epoch;
+        // UI resets may skip sessions; every durable mutation still advances exactly one.
+        while (epoch < nextEpoch) {
+          const target = epoch + 1;
+          const advanced = await post('/decision/control',{action:'advanceEpoch',epoch:target},signal); current();
+          if (advanced.epoch !== target || advanced.closed !== false) fail('epoch');
+          epoch = target;
+        }
         if (new TextEncoder().encode(JSON.stringify({packet})).length > 1048576) fail('size');
         const result=await post('/decision/choice',{packet},signal); current();
         const choice=result.choice;

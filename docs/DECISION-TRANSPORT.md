@@ -84,10 +84,19 @@ no retry, fallback or refund, including cancellation and ambiguous dispatch.
 Pause/Stop abort the request. A cancelled, failed or lost-delivery decision may
 leave the server ahead of the Controller; resuming the old state rejects instead
 of dispatching a replacement. Reset is the explicit recovery: the bridge advances
-exactly one epoch lazily, keeps the same aggregate remaining allowance and sends
+through sequential exact-next epoch changes lazily, keeps the same aggregate remaining allowance and sends
 the new `controllerSessionBase-epoch` session at revision1. Winning/loss selection
 closes the current epoch before delivery, blocks repeated/late decisions, and
 allows this bounded Reset transition. Explicit `close` revokes the grant entirely.
+The authenticated `currentEpoch` control action returns only the durable current
+epoch and immutable epoch limit after queued writes settle. It is read-only and
+never aborts work. Each explicit bridge decision first reconciles this identity;
+multiple UI Resets may require bounded sequential exact-next advances. A lost or
+aborted control reply fails that attempt without automatic retry. The next
+explicit Step or Reset reconciles the already committed epoch before proceeding;
+no decision request is resubmitted, allowance refilled or replacement grant issued.
+An epoch at/above the immutable limit rejects before any advance.
+
 Cancellation, disconnect, deadline, epoch advance and shutdown fence late results
 and receipts. A normal completed request body does not abort upstream work.
 

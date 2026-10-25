@@ -203,3 +203,74 @@ test('complete candidate ceiling rejects 256 without pruning, and fabricated 255
   await assert.rejects(f.service.decide(f.grant.capability,fake),{code:count===256?'unsupported_candidates':'input'});assert.equal(f.calls,0);
  }
 });
+test('actual HTTP: two Resets before Step reconcile and advance sequential exact-next epochs without refilling allowance',async t=>{
+ const f=await fixture(t),controls=[];
+ const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,options)=>{
+  if(route==='/decision/control')controls.push(JSON.parse(options.body));
+  return f.fetchImpl(route,options);
+ }});
+ const controller=new Controller({provider:bridge,sessionId:'controller',deadlineMs:2000});
+ controller.reset();controller.reset();assert.equal(f.calls,0);
+ const before=f.store.snapshot().used;assert.deepEqual(before,{attempts:0,inputTokens:0,estimatedMicros:0});
+ assert.ok(await controller.step());assert.equal(controller.view.observation.sessionId,'controller-2');assert.equal(controller.view.pieces,1);
+ assert.deepEqual(controls,[{action:'currentEpoch'},{action:'advanceEpoch',epoch:1},{action:'advanceEpoch',epoch:2}]);
+ assert.equal(f.store.snapshot().runs[f.grant.runId].epoch,2);assert.equal(f.store.snapshot().used.attempts,1);assert.equal(f.calls,1);assert.equal(bridge.lastReceipt.epoch,2);
+});
+test('actual HTTP: committed advance with lost or aborted reply recovers on explicit Reset without decision retry',async t=>{
+ for(const kind of ['lost','aborted'])await t.test(kind,async t=>{
+  const f=await fixture(t),controls=[];let dropped=false,controller;
+  const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,options)=>{
+   const body=route==='/decision/control'?JSON.parse(options.body):null;if(body)controls.push(body);
+   const response=await f.fetchImpl(route,options);
+   if(body?.action==='advanceEpoch'&&!dropped){
+    dropped=true;await response.arrayBuffer(); // Real HTTP response confirms the durable advance already committed.
+    if(kind==='aborted')controller.pause();
+    throw Object.assign(new Error('injected lost control delivery'),{name:kind==='aborted'?'AbortError':'Error'});
+   }
+   return response;
+  }});
+  controller=new Controller({provider:bridge,sessionId:'controller',deadlineMs:2000});controller.reset();
+  assert.equal(await controller.step(),null);assert.equal(f.store.snapshot().runs[f.grant.runId].epoch,1);
+  assert.equal(f.calls,0);assert.deepEqual(f.store.snapshot().used,{attempts:0,inputTokens:0,estimatedMicros:0});assert.equal(bridge.lastReceipt,null);
+  controller.reset();assert.ok(await controller.step());assert.equal(controller.view.pieces,1);assert.equal(controller.view.observation.sessionId,'controller-2');
+  assert.equal(f.calls,1);assert.equal(f.store.snapshot().used.attempts,1);assert.equal(bridge.lastReceipt.epoch,2);
+  assert.deepEqual(controls,[{action:'currentEpoch'},{action:'advanceEpoch',epoch:1},{action:'currentEpoch'},{action:'advanceEpoch',epoch:2}]);
+ });
+});
+test('authenticated epoch reconciliation is read-only, bounded, and cannot abort current work or enroll a run',async t=>{
+ let release,upstreamSignal;const f=await fixture(t,{transport:async(req,{signal})=>{upstreamSignal=signal;await new Promise(r=>release=r);return answer(req);}});
+ const pending=f.service.decide(f.grant.capability,packet());while(!release)await wait(1);
+ const before=f.store.snapshot(),bytes=await readFile(path.join(f.directory,'ledger.json'),'utf8');
+ const metadata=await f.service.control(f.grant.capability,'currentEpoch');assert.deepEqual(metadata,{epoch:0,maxEpochs:8});
+ assert.deepEqual(f.store.snapshot(),before);assert.equal(await readFile(path.join(f.directory,'ledger.json'),'utf8'),bytes);assert.equal(upstreamSignal.aborted,false);
+ await assert.rejects(f.service.control('0'.repeat(64),'currentEpoch'),{code:'unauthorized'});
+ await assert.rejects(f.service.control(f.grant.capability,'currentEpoch',1),{code:'input'});assert.equal(upstreamSignal.aborted,false);
+ release();await pending;
+ const controller=new Controller({provider:f.bridge,sessionId:'controller',deadlineMs:2000});for(let i=0;i<8;i++)controller.reset();
+ assert.equal(await controller.step(),null);assert.equal(f.store.snapshot().runs[f.grant.runId].epoch,0);assert.equal(f.calls,1);assert.equal(f.store.snapshot().used.attempts,1);
+});
+test('actual HTTP: lost advance reply also recovers on the next explicit Step in the same UI epoch',async t=>{
+ const f=await fixture(t);let lost=false;const actions=[];
+ const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,options)=>{
+  const body=route==='/decision/control'?JSON.parse(options.body):null;if(body)actions.push(body);
+  const response=await f.fetchImpl(route,options);
+  if(body?.action==='advanceEpoch'&&!lost){lost=true;await response.arrayBuffer();throw new Error('injected lost reply');}return response;
+ }});
+ const controller=new Controller({provider:bridge,sessionId:'controller',deadlineMs:2000});controller.reset();
+ assert.equal(await controller.step(),null);assert.equal(f.calls,0);assert.equal(f.store.snapshot().used.attempts,0);
+ assert.ok(await controller.step());assert.equal(f.calls,1);assert.equal(controller.view.pieces,1);
+ assert.deepEqual(actions,[{action:'currentEpoch'},{action:'advanceEpoch',epoch:1},{action:'currentEpoch'}]);assert.equal(bridge.lastReceipt.epoch,1);
+});
+test('actual HTTP: cancelled late epoch read cannot rewind a newer decision epoch or overwrite its receipt',async t=>{
+ const f=await fixture(t);let release,held=false;
+ const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,options)=>{
+  const body=route==='/decision/control'?JSON.parse(options.body):null;
+  const response=await f.fetchImpl(route,options);
+  if(body?.action==='currentEpoch'&&!held){held=true;const text=await response.text();await new Promise(r=>release=r);return new Response(text,{status:200});}
+  return response;
+ }});
+ const controller=new Controller({provider:bridge,sessionId:'controller',deadlineMs:2000});
+ const old=controller.step();while(!release)await wait(1);controller.reset();assert.ok(await controller.step());
+ const receipt=bridge.lastReceipt;release();assert.equal(await old,null);assert.equal(bridge.lastReceipt,receipt);
+ assert.equal(receipt.epoch,1);assert.equal(controller.view.pieces,1);assert.ok(await controller.step());assert.equal(f.calls,2);assert.equal(bridge.lastReceipt.epoch,1);
+});

@@ -51,6 +51,12 @@ export function createDecisionService({ enabled = false, store, policy, qualific
   }
   async function control(capability, action, epoch) {
     const run = authenticate(capability, store.snapshot(), true);
+    // Authenticated read waits for already-admitted writes and never cancels lane work.
+    if (action === 'currentEpoch') {
+      if (epoch !== undefined) fail('input');
+      const current = authenticate(capability, await store.inspect(), true);
+      return { epoch:current.epoch, maxEpochs:policy.maxEpochs };
+    }
     if (!['advanceEpoch','close'].includes(action)) fail('input');
     if (action === 'advanceEpoch' && (epoch !== run.epoch + 1 || epoch >= policy.maxEpochs)) fail('epoch');
     const old = pending.get(run.laneId); old?.abort.abort();

@@ -55,6 +55,7 @@ export async function openDecisionStore({ directory, lineage, policy, enroll = f
     get sound() { return !broken && !closed; },
     fixtureOnly: faultInjection !== undefined,
     snapshot: () => structuredClone(state),
+    async inspect() { await tail; if (closed || broken) bad('store_unavailable'); return structuredClone(state); },
     transact(change) {
       const job = tail.then(async () => {
         if (closed || broken) bad('store_unavailable');
