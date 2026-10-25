@@ -20,7 +20,7 @@ test('five previews cross bag boundaries without changing the accepted ordinal s
 test('observation is immutable, versioned and excludes all private randomizer state', () => {
   const state = start(createGame(999)); state.board[17][2] = 'J'; state.board[19][2] = 'L';
   const obs = observe(state, { sessionId: 'privacy', revision: 5 });
-  assert.equal(obs.hiddenRows, 0); assert.equal(obs.schemaVersion, 1); assert.equal(obs.rulesVersion, RULES.version);
+  assert.equal(obs.hiddenRows, 0); assert.equal(obs.schemaVersion, 2); assert.equal(obs.rulesVersion, RULES.version);
   assert.equal(obs.revision, 5); assert.equal(obs.board[18][2], null); assert.equal(obs.board[19][2], 'L');
   for (const key of ['seed', 'rng', 'queue', 'nextType']) assert.equal(key in obs, false);
   assert.equal(obs.next.length, 5); assert.equal(obs.capabilities.hold, false);

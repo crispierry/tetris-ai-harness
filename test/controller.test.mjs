@@ -32,8 +32,8 @@ test('mock provider receives no private state or network credential and cannot m
 });
 test('local heuristic completes a bounded natural whole game without credentials or network',async()=>{
  const c=new Controller({seed:2,sessionId:'whole'});let n=0;
- while(c.view.status!=='over'&&c.view.status!=='error'&&n++<3000)await c.step();
- assert.equal(c.view.status,'over',`expected natural loss, got ${c.view.status} after ${n}`);assert(c.view.pieces>1);assert.equal(c.view.observation.terminalReason,'blocked spawn');
+ while(c.view.status!=='won'&&c.view.status!=='over'&&c.view.status!=='error'&&n++<3000)await c.step();
+ assert.equal(c.view.status,'won',`expected Marathon completion, got ${c.view.status} after ${n}`);assert(c.view.pieces>1 && c.view.pieces<=1000);assert.equal(c.view.observation.terminalReason,'300-line target reached');assert(c.view.observation.lines>=300);assert.equal(c.view.observation.level,30);
 });
 test('effective heuristic policy is immutable and mock metadata identifies its actual fixture settings',()=>{
  const input={holes:-9},p=heuristic(input);input.holes=100;

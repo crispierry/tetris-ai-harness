@@ -2,8 +2,9 @@ import { cells, RULES } from './engine.mjs';
 import { GEOMETRY } from './harness.mjs';
 import { Controller, heuristic, mockProvider } from './controller.mjs';
 import { briefing } from './briefing.mjs';
+import { MARATHON_COPY, linesProgress, outcomeDetail } from './marathon.mjs';
 const $ = id => document.getElementById(id), format = new Intl.NumberFormat().format;
-const STATUS = { ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped', over: 'Game over', error: 'Error' };
+const STATUS = { ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped', over: 'Game over', won: MARATHON_COPY.complete, error: 'Error' };
 const board = $('h-board'), tiles = Array.from({length:RULES.width*RULES.height},()=>{const tile=document.createElement('span');tile.className='h-cell';tile.setAttribute('aria-hidden','true');board.append(tile);return tile;});
 let auto = false, loopToken = 0, timer = null, previousStatus = 'ready';
 function announce(text) { $('h-announcement').textContent=text; }
@@ -15,15 +16,15 @@ function render(view) {
  }
  board.setAttribute('aria-label',`${RULES.width} columns by ${RULES.height} rows. ${obs.board.flat().filter(Boolean).length} locked cells. ${obs.active?`Falling ${obs.active.type} piece.`:'No falling piece.'}`);
  $('h-status').textContent=STATUS[view.status];$('player-heading').textContent=view.player.name;
- for(const key of ['score','lines','level'])$('h-'+key).textContent=format(obs[key]);$('h-pieces').textContent=format(view.pieces);
+ for(const key of ['score','lines','level'])$('h-'+key).textContent=format(obs[key]);$('h-pieces').textContent=format(view.pieces);$('h-lines').textContent=linesProgress(obs.lines);$('h-outcome').textContent=outcomeDetail(view.status,obs,view.error);
  $('h-next').replaceChildren();obs.next.forEach((type,index)=>{
   const mini=document.createElement('div');mini.className=`h-mini piece-${type}`;mini.setAttribute('role','img');mini.setAttribute('aria-label',`Next ${index+1}: ${type}`);
   const occupied=new Set(GEOMETRY.find(g=>g.type===type).orientations[0].cells.map(p=>`${p.x},${p.y}`));
   for(let y=0;y<4;y++)for(let x=0;x<4;x++){const dot=document.createElement('span');if(occupied.has(`${x},${y}`))dot.className='filled';mini.append(dot);} $('h-next').append(mini);
  });
- if(['over','error'].includes(view.status)&&previousStatus!==view.status){auto=false;loopToken++;clearTimeout(timer);announce(`${STATUS[view.status]}. ${view.error??`${format(view.pieces)} pieces, ${format(obs.lines)} lines.`}`);}
- const terminal=view.status==='over';$('h-start').textContent=['paused','stopped'].includes(view.status)?'Resume':'Start';$('h-start').disabled=auto||view.busy||terminal;$('h-step').disabled=auto||view.busy||terminal;
- $('h-pause').disabled=!auto&&!view.busy;$('h-stop').disabled=view.status==='ready'||view.status==='stopped'||terminal;$('h-provider').disabled=auto||view.busy;
+ if(['over','won','error'].includes(view.status)&&previousStatus!==view.status){auto=false;loopToken++;clearTimeout(timer);announce(`Computer: ${STATUS[view.status]}. ${view.status==='won'?outcomeDetail('won',obs):view.error??`${format(view.pieces)} pieces, ${format(obs.lines)} lines.`}`);}
+ const terminal=['over','won'].includes(view.status);$('h-start').textContent=['paused','stopped'].includes(view.status)?'Resume':'Start';$('h-start').disabled=auto||view.busy||terminal;$('h-step').disabled=auto||view.busy||terminal;
+ $('h-pause').disabled=terminal||(!auto&&!view.busy);$('h-stop').disabled=view.status==='ready'||view.status==='stopped'||terminal;$('h-provider').disabled=auto||view.busy;
  $('h-error').hidden=!view.error;$('h-error').textContent=view.error??'';
  if(view.lastDecision){const c=view.lastDecision.candidate;$('h-choice').textContent=`${c.piece} · ${c.cells.map(p=>`(${p.x}, ${p.y})`).join(' ')} · ${Math.round(view.lastDecision.latencyMs)} ms`;$('h-details').textContent=JSON.stringify({orientation:c.orientation,path:c.path,clearedRows:c.clearedRows,scoreDelta:c.scoreDelta,features:c.features},null,2);}else{$('h-choice').textContent='No piece selected yet.';$('h-details').textContent='Run or step to inspect a choice.';}
  previousStatus=view.status;

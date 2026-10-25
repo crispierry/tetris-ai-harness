@@ -1,5 +1,7 @@
 # Human versus local algorithm — design brief v1
 
+P8-024 amendment: the Marathon brief v1 in `../DESIGN_BRIEF.md` and `MARATHON.md` supersedes earlier objective, success/status and safety-limit wording below. Original preparation/inspection history remains historical evidence.
+
 Product brief for the new separate mode; preparation, not running-candidate acceptance. Reuse the existing local-classic-1 rules and dark arcade design.
 
 Add a distinct `/versus.html` titled Human vs local algorithm. Preserve `/` manual solo, `/harness.html` solo computer play and `/comparison.html` algorithm comparison. All four pages show a compact wrapping Play modes navigation with current-page indication. No page redesign or framework. Human-vs-algorithm is genuinely absent in current code: comparison choices contain only local/lookahead/mocks; manual input is standalone.

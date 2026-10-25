@@ -1,9 +1,10 @@
+import { MARATHON_COPY, linesProgress, outcomeDetail, formatNumber } from './marathon.mjs';
 import { Comparison, DEFAULT_CONFIG } from './comparison.mjs';
 import { GEOMETRY } from './harness.mjs';
 import { briefing } from './briefing.mjs';
 
 const STATUS = { ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
-  over: 'Game over', error: 'Error', completed: 'Completed', replay: 'Saved replay' };
+  over: 'Game over', error: 'Error', completed: 'Run finished', won: MARATHON_COPY.complete, capped: 'Capped', replay: 'Saved replay' };
 const SETTINGS = Object.keys(DEFAULT_CONFIG);
 function download(json, doc) {
   const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
@@ -16,7 +17,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     const tile = doc.createElement('span'); tile.className = 'comparison-cell'; tile.setAttribute('aria-hidden', 'true');
     $(`c-${index}-board`).append(tile); return tile;
   }));
-  let previousAnnouncement = '';
+  let previousAnnouncement = '', previousLaneStates = [];
   function render(view) {
     SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked; });
     const ended = view.mode === 'live' && view.sample >= view.config.samples && view.lanes.every(l => l.outcome);
@@ -28,12 +29,12 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     const progress = view.mode === 'replay'
       ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new decisions or live metrics`
       : `${STATUS[view.state]} · Sample ${view.sample} of ${view.config.samples} · ${view.summary.observedPairs} completed pairs`;
-    text('c-progress', progress);
+    text('c-progress', progress + (view.config.pieceCap < 1000 ? ' · Abbreviated run' : ''));
     view.lanes.forEach((lane, index) => {
       const prefix = `c-${index}-`, obs = lane.observation;
       text(prefix + 'heading', `${index ? 'Right' : 'Left'} · ${lane.player.name}`);
       text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${lane.player.kind === 'mock' ? 'Offline test fixture' : 'Local algorithm'} · ${lane.assistance}`);
-      for (const key of ['score', 'lines', 'level']) text(prefix + key, String(obs[key])); text(prefix + 'pieces', String(lane.pieces));
+      for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
         const falling = active.get(`${x},${y}`), type = falling ?? obs.board[y][x];
@@ -49,7 +50,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
         const label = doc.createElement('span'); label.textContent = type; item.append(mini, label); $(prefix + 'next').append(item);
       });
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
-      text(prefix + 'outcome', lane.outcome ? `${lane.outcome.reason}. ${lane.outcome.censored ? 'Censored outcome.' : 'Natural game over.'} Reset to change settings.` : 'Endless score and survival. No winning threshold.');
+      text(prefix + 'outcome', outcomeDetail(lane.recordedStatus ?? lane.status, obs, lane.error));
       text(prefix + 'choice', lane.lastDecision ? `${lane.lastDecision.candidate.piece} · ${Math.round(lane.lastDecision.latencyMs)} ms local decision overhead${view.mode === 'replay' ? ' (recorded)' : ''}` : 'No piece selected yet.');
       text(prefix + 'details', JSON.stringify({ placement: lane.lastDecision?.candidate ?? null, search: lane.search, policy: lane.policy,
         recordedStatus: lane.recordedStatus ?? null, valueMeaning: 'Raw board features; scalar leaf value is not a probability.' }, null, 2));
@@ -58,7 +59,13 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     text('c-results', `Expected pairs: ${s.expectedPairs} · Observed: ${s.observedPairs} · Missing: ${s.missingPairs}${s.scoreDifferenceRange ? ` · Left minus right score range: ${s.scoreDifferenceRange.join(' to ')}` : ''}`);
     text('c-pairs', s.pairs.length ? JSON.stringify(s.pairs, null, 2) : 'No completed pairs.');
     const announcement = `${view.mode}/${view.state}/${view.sample}/${view.lanes.map(l => ['choosing','running'].includes(l.status) ? 'active' : l.status).join('/')}/${s.observedPairs}`;
-    if (announcement !== previousAnnouncement) { text('c-announcement', `${progress}. ${view.lanes.map((l, i) => `${i ? 'Right' : 'Left'}: ${STATUS[l.status]}${l.error ? '. ' + l.error : ''}`).join('. ')}`); previousAnnouncement = announcement; }
+    if (announcement !== previousAnnouncement) {
+      const laneStates = view.lanes.map(l => ['running','playing','choosing'].includes(l.status) ? 'active' : l.status);
+      const changed = view.lanes.flatMap((lane, i) => laneStates[i] === previousLaneStates[i] ? [] :
+        [`["Left", "Right"][i]: ${STATUS[lane.status]}. ${['won','capped','over','error'].includes(lane.status) ? outcomeDetail(lane.status,lane.observation,lane.error) : ''}`]);
+      text('c-announcement', `${progress}. ${changed.join(' ')}`);
+      previousLaneStates = laneStates; previousAnnouncement = announcement;
+    }
     if (view.archiveError) { $('c-error').hidden = false; text('c-error', view.archiveError); }
   }
   const comparison = comparisonFactory({ onChange: render });

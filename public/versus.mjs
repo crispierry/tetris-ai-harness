@@ -2,8 +2,8 @@ import { createGame, start, move, rotate, softDrop, hardDrop, tick, togglePause,
 import { Controller, heuristic, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { observe, freeze } from './harness.mjs';
 
-export const VERSUS_VERSION = 'human-local-versus-1';
-export const VERSUS_LIMITS = freeze({ pieces: 100, frames: 4000, exportBytes: 8 * 1024 * 1024, deadlineMs: 1500 });
+export const VERSUS_VERSION = 'human-local-versus-2';
+export const VERSUS_LIMITS = freeze({ pieces: 1000, frames: 4000, exportBytes: 8 * 1024 * 1024, deadlineMs: 1500 });
 const size = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const clone = value => JSON.parse(JSON.stringify(value));
 const snapshot = o => ({ board: o.board.map(row => row.map(c => c ?? '.').join('')), active: o.active,
@@ -20,9 +20,10 @@ export class HumanVersus {
   #id = ++instance; #session = 0; #human; #revision = 0; #pieces = 0; #humanOutcome = null;
   #ai; #aiOutcome = null; #provider; #factory; #epoch = 0; #timer = null; #state = 'ready';
   #pieceCap; #paceMs; #onChange; #frames = []; #bytes = 0; #recording = false; #archiveError = null;
+  #algorithmElapsedMs = 0; #humanGravityMs = 0;
   #mode = 'live'; #replayLanes = []; #replayIndex = -1; #playback = false;
-  constructor({ pieceCap = 100, paceMs = 500, providerFactory = () => heuristic(), onChange = () => {} } = {}) {
-    if (!Number.isInteger(pieceCap) || pieceCap < 1 || pieceCap > 100 || !Number.isInteger(paceMs) || paceMs < 150 || paceMs > 1000) throw new RangeError('Bounded piece cap and algorithm pace required.');
+  constructor({ pieceCap = 1000, paceMs = 500, providerFactory = () => heuristic(), onChange = () => {} } = {}) {
+    if (!Number.isInteger(pieceCap) || pieceCap < 1 || pieceCap > 1000 || !Number.isInteger(paceMs) || paceMs < 150 || paceMs > 1000) throw new RangeError('Bounded piece cap and algorithm pace required.');
     this.#pieceCap = pieceCap; this.#paceMs = paceMs; this.#factory = providerFactory; this.#onChange = onChange; this.#setup();
   }
   #setup() {
@@ -44,7 +45,7 @@ export class HumanVersus {
     return freeze([{ version: 'manual-focused-clock-1', kind: 'human', rulesVersion: RULES.version,
       timing: 'Real gravity in focused running play; independent of algorithm choosing; elapsed chunks at most250ms', pieceCap: this.#pieceCap },
     { version: this.#provider.version, kind: this.#provider.kind, rulesVersion: RULES.version,
-      assistance: 'canonical-afterstates-v1', weights: this.#provider.kind === 'local' && this.#provider.version === 'heuristic-1' ? HEURISTIC_WEIGHTS : null,
+      assistance: 'canonical-afterstates-v1', weights: this.#provider.kind === 'local' && this.#provider.version === 'heuristic-2' ? HEURISTIC_WEIGHTS : null,
       paceMs: this.#paceMs, deadlineMs: VERSUS_LIMITS.deadlineMs, pieceCap: this.#pieceCap, live: false }]);
   }
   get view() {
@@ -86,8 +87,8 @@ export class HumanVersus {
     this.#recording = true; this.#record(0, 'initial'); this.#record(1, 'initial');
   }
   #outcome(view) {
-    return freeze({ status: view.status === 'error' ? 'error' : view.observation.status === 'over' ? 'over' : 'completed',
-      reason: view.error ?? view.observation.terminalReason ?? 'piece cap', censored: view.observation.status !== 'over',
+    return freeze({ status: view.status === 'error' ? 'error' : view.observation.status === 'won' ? 'won' : view.observation.status === 'over' ? 'over' : 'capped',
+      reason: view.error ?? view.observation.terminalReason ?? 'piece cap', censored: !['over', 'won'].includes(view.observation.status),
       score: view.observation.score, lines: view.observation.lines, pieces: view.pieces });
   }
   #finish() { if (this.#humanOutcome && this.#aiOutcome) { this.#state = 'completed'; this.#fence(); } }
@@ -114,7 +115,7 @@ export class HumanVersus {
   }
   reset() {
     this.#state = 'stopped'; this.#fence(true); this.#frames = []; this.#bytes = 0; this.#recording = false;
-    this.#archiveError = null; this.#mode = 'live'; this.#replayLanes = []; this.#replayIndex = -1;
+    this.#archiveError = null; this.#algorithmElapsedMs = 0; this.#humanGravityMs = 0; this.#mode = 'live'; this.#replayLanes = []; this.#replayIndex = -1;
     this.#state = 'ready'; this.#session++; this.#setup(); this.#emit();
   }
   #applyHuman(next, event) {
@@ -122,7 +123,7 @@ export class HumanVersus {
     this.#human = next; this.#revision++;
     const visible = next.active !== old.active || next.board !== old.board || next.status !== old.status;
     if (next.board !== old.board) this.#pieces++;
-    if (next.status === 'over' || this.#pieces >= this.#pieceCap) {
+    if (next.status === 'over' || next.status === 'won' || this.#pieces >= this.#pieceCap) {
       this.#humanOutcome = this.#outcome(this.#humanView());
       if (this.#human.status === 'playing') this.#human = togglePause(this.#human);
     }
@@ -136,15 +137,18 @@ export class HumanVersus {
   tick(elapsedMs) {
     if (!Number.isFinite(elapsedMs) || elapsedMs < 0) throw new RangeError('Nonnegative finite elapsed time required.');
     if (this.#mode !== 'live' || this.#state !== 'running' || this.#humanOutcome || !this.#capacity()) return;
+    this.#humanGravityMs += Math.min(250, elapsedMs);
     this.#applyHuman(tick(this.#human, Math.min(250, elapsedMs)), 'gravity');
   }
   async #oneAI(epoch) {
     if (epoch !== this.#epoch || this.#aiOutcome || this.#ai.view.busy || !this.#capacity()) return;
     const controller = this.#ai;
+    const started = performance.now();
     await controller.step({ continueRunning: this.#state === 'running' });
+    if (epoch === this.#epoch) this.#algorithmElapsedMs += performance.now() - started;
     if (epoch !== this.#epoch || controller !== this.#ai) return;
     const v = controller.view;
-    if (v.status === 'error' || v.status === 'over' || v.pieces >= this.#pieceCap) this.#aiOutcome = this.#outcome(v);
+    if (v.status === 'error' || v.status === 'over' || v.status === 'won' || v.pieces >= this.#pieceCap) this.#aiOutcome = this.#outcome(v);
     this.#record(1, this.#aiOutcome ? 'outcome' : 'placement'); this.#finish(); this.#emit();
   }
   async #runAI(epoch) {
@@ -178,7 +182,12 @@ export class HumanVersus {
   }
   exportRun() {
     const record = { version: VERSUS_VERSION, frameVersion: 1, rulesVersion: RULES.version,
-      objective: RULES.objective, limits: this.view.limits, policies: this.#policies(), frames: this.#frames,
+      objective: RULES.objective, admission: { plannedPlacements: 2 * this.#pieceCap,
+        maximumAlgorithmDecisionWaitMs: this.#pieceCap * VERSUS_LIMITS.deadlineMs,
+        maximumAlgorithmPaceWaitMs: this.#pieceCap * this.#paceMs,
+        maxFrames: VERSUS_LIMITS.frames, maxExportBytes: VERSUS_LIMITS.exportBytes,
+        observedAlgorithmAttemptMs: this.#algorithmElapsedMs, observedHumanGravityMs: this.#humanGravityMs,
+        meaning: 'Planned waits bound algorithm work, not human wall time. Human input/gravity recording shares finite frame/byte capacity. Paused time has no expiry.' }, limits: this.view.limits, policies: this.#policies(), frames: this.#frames,
       outcomes: [this.#humanOutcome, this.#aiOutcome], archiveIncomplete: !!this.#archiveError, archiveError: this.#archiveError,
       provenance: { players: 'Human keyboard and local/mock algorithm only', liveProviders: false, modelCalls: 0, actualCostUSD: null,
         pairing: 'Same private deterministic ordinal sequence; seeds and hidden queue omitted',

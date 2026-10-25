@@ -6,7 +6,7 @@ import { briefing, workedExamples, instructionPacket, validateChoice } from '../
 test('rules briefing derives numeric facts and all geometry from canonical exports',()=>{
  const brief=briefing();assert.equal(brief.rules,RULES);assert.equal(brief.rules.version,brief.rulesVersion);
  assert.equal(brief.geometry.length,7);assert.equal(brief.rules.hold,false);assert.equal(brief.rules.hiddenRows,0);
- assert(brief.instructions.some(s=>s.includes('There is no victory condition')));
+ assert(brief.instructions.some(s=>s.includes('Marathon: clear 300 lines')));
  assert(brief.instructions.some(s=>s.includes('100/300/500/800')));assert(Object.isFrozen(brief));
 });
 test('three executable worked examples have exact expected rotation, collapse, score/level and loss',()=>{

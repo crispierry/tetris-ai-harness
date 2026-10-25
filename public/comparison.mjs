@@ -3,12 +3,12 @@ import { createLookaheadProvider, LOOKAHEAD_VERSION } from './lookahead.mjs';
 import { freeze, VERSIONS } from './harness.mjs';
 import { RULES } from './engine.mjs';
 
-export const COMPARISON_VERSION = 'offline-comparison-1';
-export const LIMITS = freeze({ samples: 8, pieceCap: 100, paceMin: 30, paceMax: 1000,
-  nodeCap: 4000, timeMs: 1000, deadlineMs: 1500, placements: 1600, frames: 4000, exportBytes: 8 * 1024 * 1024 });
+export const COMPARISON_VERSION = 'offline-comparison-2';
+export const LIMITS = freeze({ samples: 8, pieceCap: 1000, paceMin: 30, paceMax: 1000,
+  nodeCap: 4000, timeMs: 1000, deadlineMs: 1500, placements: 2000, frames: 4000, exportBytes: 8 * 1024 * 1024 });
 export const PLAYERS = freeze({ local: 'Local heuristic', look1: 'Lookahead depth 1', look2: 'Lookahead depth 2',
   delay: 'Delayed mock', error: 'Error mock' });
-export const DEFAULT_CONFIG = freeze({ left: 'local', right: 'look1', samples: 1, pieceCap: 20, paceMs: 150, nodeCap: 4000, timeMs: 500 });
+export const DEFAULT_CONFIG = freeze({ left: 'local', right: 'look1', samples: 1, pieceCap: 1000, paceMs: 150, nodeCap: 4000, timeMs: 500 });
 const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const copy = value => JSON.parse(JSON.stringify(value));
 let instances = 0;
@@ -17,10 +17,10 @@ export function validateConfig(input = {}) {
   const c = { ...DEFAULT_CONFIG, ...input };
   if (Object.keys(c).some(k => !Object.hasOwn(DEFAULT_CONFIG, k))) throw new RangeError('Unknown comparison setting.');
   for (const key of ['left', 'right']) if (!Object.hasOwn(PLAYERS, c[key])) throw new RangeError(`${key} player is unavailable. Choose a local player or mock.`);
-  for (const [key, min, max] of [['samples', 1, 8], ['pieceCap', 1, 100], ['paceMs', 30, 1000], ['nodeCap', 1, 4000], ['timeMs', 1, 1000]]) {
+  for (const [key, min, max] of [['samples', 1, 8], ['pieceCap', 1, 1000], ['paceMs', 30, 1000], ['nodeCap', 1, 4000], ['timeMs', 1, 1000]]) {
     if (!Number.isInteger(c[key]) || c[key] < min || c[key] > max) throw new RangeError(`${key} must be a whole number from ${min} to ${max}.`);
   }
-  if (2 * c.samples * c.pieceCap > LIMITS.placements) throw new RangeError('Planned placements exceed 1600.');
+  if (2 * c.samples * c.pieceCap > LIMITS.placements) throw new RangeError('Planned placements exceed 2000.');
   return freeze(c);
 }
 function providerFor(key, config) {
@@ -48,7 +48,7 @@ function compactSearch(provider) {
 function lanePolicy(provider, key) {
   const p = provider.runMetadata?.search;
   if (!p) return freeze({ version: provider.version, kind: provider.kind, assistance: 'canonical-afterstates-v1',
-    weights: HEURISTIC_WEIGHTS, tieOrder: 'Original candidate order', terminalPenalty: -1000000000,
+    weights: HEURISTIC_WEIGHTS, tieOrder: 'Original candidate order', terminalPenalty: -1000000000, completionReward: 1000000000,
     fixture: key === 'delay' || key === 'error' ? { mode: key, delayMs: 250 } : null,
     meaning: 'Deterministic local board heuristic, not a probability', live: false });
   // Copy only the accepted public policy contract, never roots, responses or private engine state.
@@ -56,9 +56,9 @@ function lanePolicy(provider, key) {
     objective: p.objective, tier: p.tier, depth: p.depth, nodeCap: p.nodeCap, callCap: p.callCap,
     timeMs: p.timeMs, maxOutputBytes: p.maxOutputBytes, discount: p.discount,
     evaluator: { name: p.evaluator.name, kind: p.evaluator.kind, version: p.evaluator.version,
-      policy: { weights: p.evaluator.policy.weights, terminalPenalty: p.evaluator.policy.terminalPenalty,
+      policy: { weights: p.evaluator.policy.weights, terminalPenalty: p.evaluator.policy.terminalPenalty, completionReward: p.evaluator.policy.completionReward,
         valueRange: p.evaluator.policy.valueRange, meaning: p.evaluator.policy.meaning } },
-    rootReward: p.rootReward, tieOrder: p.tieOrder, pruning: p.pruning, cache: p.cache,
+    rootReward: p.rootReward, terminalOrder: p.terminalOrder, tieOrder: p.tieOrder, pruning: p.pruning, cache: p.cache,
     reachabilityBounds: p.reachabilityBounds, horizon: p.horizon, live: p.live, modelCalls: p.modelCalls, spendCapUSD: p.spendCapUSD }));
 }
 function replayView(frame) {
@@ -71,6 +71,7 @@ function replayView(frame) {
 export class Comparison {
   #config; #factory; #onChange; #lanes = []; #sample = 0; #epoch = 0; #timers = new Set(); #auto = false;
   #state = 'ready'; #locked = false; #frames = []; #frameBytes = 0; #pairs = []; #policies = []; #archiveError = null;
+  #decisionElapsedMs = 0;
   #mode = 'live'; #replayIndex = -1; #replayLanes = []; #id = ++instances;
   #seeds = Array.from({ length: 8 }, (_, i) => (0x51f15e + Math.imul(i + 1, 0x9e3779b9)) >>> 0);
   constructor({ config = {}, onChange = () => {}, providerFactory = providerFor } = {}) {
@@ -152,12 +153,14 @@ export class Comparison {
   async #one(index, epoch) {
     const lane = this.#lanes[index];
     if (epoch !== this.#epoch || lane.outcome || lane.controller.view.busy) return;
+    const started = performance.now();
     await lane.controller.step({ continueRunning: this.#auto });
+    if (epoch === this.#epoch) this.#decisionElapsedMs += performance.now() - started;
     if (epoch !== this.#epoch || lane !== this.#lanes[index]) return;
     const v = lane.controller.view;
-    if (v.status === 'error' || v.status === 'over' || v.pieces >= this.#config.pieceCap) {
-      lane.outcome = freeze({ status: v.status === 'error' ? 'error' : v.status === 'over' ? 'over' : 'completed',
-        reason: v.error ?? v.observation.terminalReason ?? 'piece cap', censored: v.status !== 'over',
+    if (v.status === 'error' || v.status === 'over' || v.status === 'won' || v.pieces >= this.#config.pieceCap) {
+      lane.outcome = freeze({ status: v.status === 'error' ? 'error' : v.status === 'won' ? 'won' : v.status === 'over' ? 'over' : 'capped',
+        reason: v.error ?? v.observation.terminalReason ?? 'piece cap', censored: !['over', 'won'].includes(v.status),
         pieces: v.pieces, score: v.observation.score, lines: v.observation.lines });
     }
     this.#record(index, lane.outcome ? 'outcome' : 'placement'); this.#finishPair();
@@ -192,11 +195,11 @@ export class Comparison {
     if (this.#lanes.every(l => l.outcome) && this.#sample + 1 >= this.#config.samples) this.#state = 'completed';
     this.#emit();
   }
-  pause() { this.#fence(); this.#state = this.#mode === 'replay' ? 'replay' : 'paused'; this.#emit(); }
-  stop() { this.#fence('stopped'); this.#state = this.#mode === 'replay' ? 'replay' : 'stopped'; this.#emit(); }
+  pause() { if (this.#state === 'completed' && this.#mode === 'live') return; this.#fence(); this.#state = this.#mode === 'replay' ? 'replay' : 'paused'; this.#emit(); }
+  stop() { if (this.#state === 'completed' && this.#mode === 'live') return; this.#fence('stopped'); this.#state = this.#mode === 'replay' ? 'replay' : 'stopped'; this.#emit(); }
   reset() {
     this.#fence('stopped'); this.#sample = 0; this.#locked = false; this.#frames = []; this.#frameBytes = 0;
-    this.#pairs = []; this.#policies = []; this.#archiveError = null; this.#mode = 'live'; this.#replayIndex = -1; this.#replayLanes = [];
+    this.#pairs = []; this.#policies = []; this.#decisionElapsedMs = 0; this.#archiveError = null; this.#mode = 'live'; this.#replayIndex = -1; this.#replayLanes = [];
     this.#state = 'ready'; this.#setup(); this.#emit();
   }
   replay() {
@@ -221,7 +224,13 @@ export class Comparison {
   }
   exportRun() {
     const record = freeze({ version: COMPARISON_VERSION, frameVersion: 1, rulesVersion: RULES.version, schemas: VERSIONS,
-      config: this.#config, policy: { deadlineMs: LIMITS.deadlineMs, plannedPlacements: 2 * this.#config.samples * this.#config.pieceCap,
+      config: this.#config, admission: {
+        plannedPlacements: 2 * this.#config.samples * this.#config.pieceCap,
+        maximumDecisionWaitMs: 2 * this.#config.samples * this.#config.pieceCap * LIMITS.deadlineMs,
+        maximumPaceWaitMs: 2 * this.#config.samples * this.#config.pieceCap * this.#config.paceMs,
+        maxFrames: LIMITS.frames, maxExportBytes: LIMITS.exportBytes,
+        observedDecisionAttemptMs: this.#decisionElapsedMs,
+        meaning: 'Planned waits are conservative aggregate bounds, not measured wall time. Observed lane attempts include preparation and async waiting and may overlap. Paused time has no expiry.' }, policy: { deadlineMs: LIMITS.deadlineMs, plannedPlacements: 2 * this.#config.samples * this.#config.pieceCap,
         lookaheadVersion: LOOKAHEAD_VERSION, pairing: 'Private paired sequences omitted', liveProviders: false, modelCalls: 0,
         actualCostUSD: null, replay: 'Saved visual frames only; not canonical Node verification' },
       summary: this.#summary(), archiveError: this.#archiveError, policies: [...this.#policies], frames: [...this.#frames] });

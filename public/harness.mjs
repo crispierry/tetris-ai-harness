@@ -1,6 +1,6 @@
-import { RULES, cells, move, rotate, softDrop, hardDrop } from './engine.mjs';
+import { RULES, terminalReason, cells, move, rotate, softDrop, hardDrop } from './engine.mjs';
 
-export const VERSIONS = Object.freeze({ observation: 1, candidate: 1, features: 1, decision: 1 });
+export const VERSIONS = Object.freeze({ observation: 2, candidate: 2, features: 1, decision: 2 });
 export function freeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.values(value).forEach(freeze); Object.freeze(value);
@@ -36,7 +36,7 @@ export function observe(state, { sessionId, revision, previewLimit = RULES.previ
     next: state.queue.slice(0, previewLimit), previewCount: previewLimit,
     score: state.score, lines: state.lines, level: state.level, status: state.status,
     gravityElapsedMs: state.gravityElapsed, objective: RULES.objective,
-    terminalReason: state.status === 'over' ? 'blocked spawn' : null,
+    terminalReason: terminalReason(state.status),
     capabilities: { hold: false, ghost: false, spins: false, combos: false, lockDelayMs: 0 },
   });
 }
@@ -71,7 +71,7 @@ export function enumerate(state, binding, { maxPoses = 800, maxTransitions = 400
       sessionId: observation.sessionId, revision: observation.revision, rulesVersion: RULES.version,
       movementMode: 'reachable-paused-gravity-v1', piece: pose.type, orientation: pose.rotation,
       x: pose.x, y: pose.y, cells: placed, bounds: bounds(placed), path,
-      terminalReason: outcome.status === 'over' ? 'blocked spawn' : null });
+      terminalReason: terminalReason(outcome.status) });
     bindings.set(candidate, { signature: original, path: [...path], pose: { ...pose } }); result.push(candidate);
   }
   for (let index = 0; index < frontier.length; index++) {
@@ -136,13 +136,13 @@ export function simulate(state, candidate, binding) {
   const beforeFeatures = features(state.board), afterFeatures = features(after.board);
   return freeze({ state: after, placedCells: candidate.cells, clearedRows,
     linesDelta: after.lines - state.lines, scoreDelta: after.score - state.score,
-    levelDelta: after.level - state.level, terminalReason: after.status === 'over' ? 'blocked spawn' : null,
+    levelDelta: after.level - state.level, terminalReason: terminalReason(after.status),
     features: afterFeatures, featureDeltas: featureDelta(beforeFeatures, afterFeatures) });
 }
-/** Hypothetical next observation may only reveal the ORIGINAL visible queue, minus its consumed head. */
+/** Hypothetical next observation retains the original five on victory; otherwise consumes its head. */
 export function candidateEvidence(state, candidate, binding) {
   const simulation = simulate(state, candidate, binding);
-  const afterstate = observe(simulation.state, { ...binding, revision: binding.revision + 1, previewLimit: RULES.previewCount - 1 });
+  const afterstate = observe(simulation.state, { ...binding, revision: binding.revision + 1, previewLimit: RULES.previewCount - (simulation.state.status === 'won' ? 0 : 1) });
   return freeze({ ...candidate, afterstate, clearedRows: simulation.clearedRows,
     linesDelta: simulation.linesDelta, scoreDelta: simulation.scoreDelta, levelDelta: simulation.levelDelta,
     features: simulation.features, featureDeltas: simulation.featureDeltas });

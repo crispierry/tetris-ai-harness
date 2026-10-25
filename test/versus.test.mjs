@@ -15,7 +15,7 @@ const publicGame = o => ({ board:o.board, active:o.active && {type:o.active.type
   score:o.score,lines:o.lines,level:o.level,status:o.status,gravityElapsedMs:o.gravityElapsedMs });
 
 test('configuration is bounded and refuses remote/live providers', () => {
-  for(const options of [{pieceCap:0},{pieceCap:101},{paceMs:149},{paceMs:1001},{pieceCap:1.5}])assert.throws(()=>new HumanVersus(options),/Bounded/);
+  for(const options of [{pieceCap:0},{pieceCap:1001},{paceMs:149},{paceMs:1001},{pieceCap:1.5}])assert.throws(()=>new HumanVersus(options),/Bounded/);
   assert.throws(()=>new HumanVersus({providerFactory:()=>({...heuristic(),kind:'live'})}),/Only local/);
 });
 
@@ -60,7 +60,7 @@ test('human game over retains its board while independent AI continues', async (
 });
 
 test('algorithm cap/error retains its board while human controls continue without fallback', async () => {
-  const c=new HumanVersus({pieceCap:2,paceMs:150});c.start();await until(()=>c.view.lanes[1].status==='completed');
+  const c=new HumanVersus({pieceCap:2,paceMs:150});c.start();await until(()=>c.view.lanes[1].status==='capped');
   const ai=c.view.lanes[1];c.input('left');for(let n=0;n<4;n++)c.tick(200);
   assert.equal(c.view.lanes[0].observation.active.y,1);assert.deepEqual(c.view.lanes[1],ai);assert.equal(c.view.state,'running');c.dispose();
   const e=new HumanVersus({providerFactory:()=>mockProvider({mode:'error',delayMs:0})});e.start();await until(()=>e.view.lanes[1].status==='error');

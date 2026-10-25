@@ -1,5 +1,7 @@
 # P8-011 comparison surface — design brief v1
 
+P8-024 amendment: the Marathon brief v1 in `../DESIGN_BRIEF.md` and `MARATHON.md` supersedes earlier objective, success/status and safety-limit wording below. Original preparation/inspection history remains historical evidence.
+
 **Status:** design brief for implementation planning; not source, runtime, or acceptance evidence. Scope is the user-authorized offline comparison tranche. Preserve the accepted manual game at `/` and the solo harness at `/harness.html`; add a separate plain JavaScript/CSS page at `/comparison.html`, using the existing dark arcade tokens, card layout, typography, piece colors, semantic controls, focus styles, and reduced-motion rules. No framework, provider credentials, browser transport, external hosting, or live calls.
 
 ## User experience and labels

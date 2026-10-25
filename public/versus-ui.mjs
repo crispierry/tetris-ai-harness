@@ -1,7 +1,8 @@
+import { MARATHON_COPY, linesProgress, outcomeDetail, formatNumber } from './marathon.mjs';
 import { HumanVersus } from './versus.mjs';
 import { GEOMETRY } from './harness.mjs';
 const STATUS = { ready: 'Ready', playing: 'Playing', running: 'Running', choosing: 'Choosing…', paused: 'Paused',
-  stopped: 'Stopped', over: 'Game over', error: 'Error', completed: 'Completed', replay: 'Saved replay' };
+  stopped: 'Stopped', over: 'Game over', error: 'Error', completed: 'Run finished', won: MARATHON_COPY.complete, capped: 'Capped', replay: 'Saved replay' };
 const KEYS = { arrowleft: 'left', arrowright: 'right', arrowdown: 'down', arrowup: 'rotate', x: 'rotate', ' ': 'drop' };
 function download(json, doc) {
   const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
@@ -12,7 +13,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const $ = id => doc.getElementById(id), text = (id, value) => { $(id).textContent = value; };
   const surface = $('v-human-game');
   const tiles = [0, 1].map(i => Array.from({ length: 200 }, () => { const e = doc.createElement('span'); e.className = 'comparison-cell'; e.setAttribute('aria-hidden', 'true'); $(`v-${i}-board`).append(e); return e; }));
-  let previousAnnouncement = '', lastFrame = null, frameHandle = null, disposed = false;
+  let previousAnnouncement = '', previousLaneStates = [], lastFrame = null, frameHandle = null, disposed = false;
   function render(view) {
     const replay = view.mode === 'replay', finished = view.state === 'completed', archiveBlocked = !replay && !!view.archiveError;
     $('v-start').disabled = finished || view.running || view.busy || view.playback || archiveBlocked;
@@ -24,11 +25,11 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     $('v-replay').disabled = !view.frameCount; $('v-export').disabled = !view.frameCount;
     const progress = replay ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new choices`
       : `${STATUS[view.state]} · Human ${view.lanes[0].pieces}/${view.limits.pieces} pieces · Algorithm ${view.lanes[1].pieces}/${view.limits.pieces} pieces`;
-    text('v-progress', progress); text('v-recording', `${view.frameCount} saved frames${view.archiveError ? ' · Incomplete recording' : ''}. Reset clears this run.`);
+    text('v-progress', progress + (view.limits.pieces < 1000 ? ' · Abbreviated run' : '')); text('v-recording', `${view.frameCount} saved frames${view.archiveError ? ' · Incomplete recording' : ''}. Reset clears this run.`);
     view.lanes.forEach((lane, i) => {
       const prefix = `v-${i}-`, obs = lane.observation;
       text(prefix + 'status', STATUS[lane.status]);
-      for (const key of ['score', 'lines', 'level']) text(prefix + key, String(obs[key])); text(prefix + 'pieces', String(lane.pieces));
+      for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
         const falling = active.get(`${x},${y}`), type = falling ?? obs.board[y][x], tile = tiles[i][y * 10 + x];
@@ -42,7 +43,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
         for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) { const dot = doc.createElement('span'); if (occupied.has(`${x},${y}`)) dot.className = 'filled'; mini.append(dot); }
         const label = doc.createElement('span'); label.textContent = type; item.append(mini, label); $(prefix + 'next').append(item);
       });
-      text(prefix + 'outcome', lane.outcome ? `${lane.outcome.reason}. ${lane.outcome.censored ? 'Censored outcome.' : 'Natural game over.'} The other board can continue.` : 'Endless score and survival. No winning threshold.');
+      text(prefix + 'outcome', outcomeDetail(lane.recordedStatus ?? lane.status, obs, lane.error));
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
       text(prefix + 'details', JSON.stringify({ policy: view.policies[i], recordedStatus: lane.recordedStatus ?? null,
         placement: lane.lastDecision?.candidate ?? null, outcome: lane.outcome }, null, 2));
@@ -50,7 +51,13 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     const last = view.lanes[1].lastDecision;
     text('v-choice', last ? `${last.candidate.piece} · ${Math.round(last.latencyMs)} ms local algorithm decision overhead${replay ? ' (recorded)' : ''}` : 'No algorithm piece selected yet.');
     const announcement = `${view.mode}/${view.state}/${view.lanes.map(l => ['running','playing','choosing'].includes(l.status) ? 'active' : l.status).join('/')}`;
-    if (announcement !== previousAnnouncement) { text('v-announcement', `${progress}. Human ${STATUS[view.lanes[0].status]}. Algorithm ${STATUS[view.lanes[1].status]}${view.lanes[1].error ? '. ' + view.lanes[1].error : ''}.`); previousAnnouncement = announcement; }
+    if (announcement !== previousAnnouncement) {
+      const laneStates = view.lanes.map(l => ['running','playing','choosing'].includes(l.status) ? 'active' : l.status);
+      const changed = view.lanes.flatMap((lane, i) => laneStates[i] === previousLaneStates[i] ? [] :
+        [`["Human", "Algorithm"][i]: ${STATUS[lane.status]}. ${['won','capped','over','error'].includes(lane.status) ? outcomeDetail(lane.status,lane.observation,lane.error) : ''}`]);
+      text('v-announcement', `${progress}. ${changed.join(' ')}`);
+      previousLaneStates = laneStates; previousAnnouncement = announcement;
+    }
     if (view.archiveError) { $('v-message').hidden = false; text('v-message', view.archiveError); }
     if (!view.running) lastFrame = null;
   }

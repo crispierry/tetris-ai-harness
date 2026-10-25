@@ -1,6 +1,6 @@
 // Node-only offline protocol boundary. No credentials, fetch, environment reads or default transport.
 import { createHash } from 'node:crypto';
-import { validateChoice, BRIEF_VERSION } from './public/briefing.mjs';
+import { validateChoice, validatePacket, BRIEF_VERSION } from './public/briefing.mjs';
 import { freeze, VERSIONS } from './public/harness.mjs';
 
 export const ASTRA_CONFIG = freeze({ model: 'gpt-6-astra', reasoningEffort: 'medium', serviceTier: 'default',
@@ -28,6 +28,7 @@ function configuration(input) {
 }
 function requestFor(packet, config) {
   try {
+    validatePacket(packet);
     if (packet.schemaVersion !== VERSIONS.decision || packet.rulesBrief?.version !== BRIEF_VERSION || !packet.candidates?.length ||
         packet.candidates.length > 800 || !Number.isInteger(packet.deadlineMs) || packet.deadlineMs < 1 || bytes(packet) > 1048576) fail('input');
     // The documented strict subset supports enum; do not forward the controller's JSON Schema const keywords.

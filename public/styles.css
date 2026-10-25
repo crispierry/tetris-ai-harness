@@ -13,7 +13,7 @@ button { font: inherit; }
 .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
 .eyebrow { color: var(--accent); margin: 0 0 4px; font-size: .65rem; font-weight: 750; letter-spacing: .18em; }
 h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 2.2rem); line-height: 1.05; letter-spacing: -.045em; }
-.intro { max-width: 170px; margin: 0 0 2px; font-size: .82rem; line-height: 1.5; color: var(--muted); }
+.intro { max-width: 280px; margin: 0 0 2px; font-size: .82rem; line-height: 1.5; color: var(--muted); }
 h2 { margin: 0; font-size: .75rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .game-layout { display: grid; grid-template-columns: max-content minmax(0, 1fr); grid-template-areas: "play stats" "play next" "play help"; grid-template-rows: auto auto 1fr; align-items: start; gap: 14px 20px; }
 .play-card, .card { border: 1px solid var(--border); border-radius: 14px; background: #19212d; }
