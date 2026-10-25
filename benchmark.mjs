@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { Controller, heuristic } from './public/controller.mjs';
-import { RULES } from './public/engine.mjs';
+import * as classicReplay from './legacy/classic-v1/benchmark.mjs';
+import { RULES, levelForLines, isTerminal, terminalReason } from './public/engine.mjs';
 import { VERSIONS, freeze } from './public/harness.mjs';
 import { BRIEF_VERSION } from './public/briefing.mjs';
 import { ProviderError } from './providers.mjs';
-export const BENCHMARK_VERSION = 'offline-benchmark-1';
+export const BENCHMARK_VERSION = 'offline-benchmark-2';
 const plain = value => value !== null && typeof value === 'object' && [Object.prototype,null].includes(Object.getPrototypeOf(value));
 export function stableJSON(value) {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
@@ -47,8 +48,8 @@ export function preflight(options, players, seeds) {
   assert(typeof options.sourceRevision === 'string' && /^[a-f0-9]{40}$/.test(options.sourceRevision), 'Pinned source revision required');
   assert(Array.isArray(seeds) && bounded(seeds.length,8) && seeds.every(s => Number.isInteger(s) && s > 0 && s <= 0xffffffff) && new Set(seeds).size===seeds.length, 'Unique private nonzero uint32 seed set required');
   assert(Array.isArray(players) && players.length === 2 && players.every(p => typeof p?.create === 'function'), 'Two provider factories required');
-  const config = { maxPieces: options.maxPieces ?? 100, deadlineMs: options.deadlineMs ?? 1500, runWallMs: options.runWallMs ?? 30000, fallback: options.fallback ?? 'none' };
-  assert(bounded(config.maxPieces,3000) && config.maxPieces * seeds.length * 2 <= 8000 && bounded(config.deadlineMs,60000) && bounded(config.runWallMs,60000), 'Benchmark resource cap exceeded');
+  const config = { maxPieces: options.maxPieces ?? 1000, deadlineMs: options.deadlineMs ?? 1500, runWallMs: options.runWallMs ?? 30000, fallback: options.fallback ?? 'none' };
+  assert(bounded(config.maxPieces,1000) && config.maxPieces * seeds.length * 2 <= 2000 && bounded(config.deadlineMs,60000) && bounded(config.runWallMs,60000), 'Benchmark resource cap exceeded');
   assert(['none','local-heuristic-explicit'].includes(config.fallback), 'Unsupported fallback policy');
   const instances = seeds.map(() => players.map(p => p.create()));
   const seen = new Set(), identities = instances[0].map(identity);
@@ -58,23 +59,28 @@ export function preflight(options, players, seeds) {
   });
   const manifest = freeze({ version: BENCHMARK_VERSION, codeVersion: BENCHMARK_VERSION, sourceRevision: options.sourceRevision,
     rulesVersion: RULES.version, schemas: VERSIONS, promptVersion: BRIEF_VERSION, runId: options.runId,
-    objective: RULES.objective, target: null, hold: false, previewCount: 5, initialBoard: 'empty-10x20', randomizer: 'seven-bag-xorshift32-fisher-yates',
+    objective: RULES.objective, target: RULES.targetLines, hold: false, previewCount: 5, initialBoard: 'empty-10x20', randomizer: 'seven-bag-xorshift32-fisher-yates',
     clock: 'step-frozen-game-time', actions: ['left','right','clockwise','down','drop'], assistance: 'canonical-afterstates-v1',
     seedSetReference: `${options.runId}-private-seeds`, seedCount: seeds.length, players: identities, ...config,
-    retryLimit: 0, live: false, budgetUSD: 0, fallbackProvider: identity(heuristic()), maxPlannedPlacements:8000, maxEvents:16032, maxArtifactBytes:33554432,
-    limits: 'Endless game; cap is censoring, never victory. Offline fixtures do not establish live model quality or pricing.' });
+    plannedPlacements: config.maxPieces * seeds.length * 2,
+    plannedRunWallUpperBoundMs: config.runWallMs * seeds.length * 2,
+    plannedDecisionWaitUpperBoundMs: config.maxPieces * seeds.length * 2 * config.deadlineMs * (config.fallback === 'none' ? 1 : 2),
+    retryLimit: 0, live: false, budgetUSD: 0, fallbackProvider: identity(heuristic()), maxPlannedPlacements:2000, maxEvents:4032, maxArtifactBytes:33554432,
+    limits: '300-line Marathon; cap is censoring, never victory. Offline fixtures do not establish live model quality or pricing.' });
   validateManifest(manifest);
   return { manifest, instances };
 }
 function validateManifest(m) {
   assert(plain(m) && m.version===BENCHMARK_VERSION && m.codeVersion===BENCHMARK_VERSION && m.rulesVersion===RULES.version &&
     stableJSON(m.schemas)===stableJSON(VERSIONS) && m.promptVersion===BRIEF_VERSION && /^[a-f0-9]{40}$/.test(m.sourceRevision??'') &&
-    typeof m.runId==='string'&&/^[A-Za-z0-9_-]{1,24}$/.test(m.runId) && m.objective===RULES.objective && m.target===null &&
+    typeof m.runId==='string'&&/^[A-Za-z0-9_-]{1,24}$/.test(m.runId) && m.objective===RULES.objective && m.target===RULES.targetLines &&
     m.hold===false && m.previewCount===5 && m.initialBoard==='empty-10x20' && m.randomizer==='seven-bag-xorshift32-fisher-yates' &&
     m.clock==='step-frozen-game-time' && m.assistance==='canonical-afterstates-v1' && stableJSON(m.actions)===stableJSON(['left','right','clockwise','down','drop']) &&
     m.live===false && m.budgetUSD===0 && m.retryLimit===0 && ['none','local-heuristic-explicit'].includes(m.fallback) &&
-    bounded(m.seedCount,8)&&m.seedSetReference===`${m.runId}-private-seeds` && bounded(m.maxPieces,3000)&&m.maxPieces*m.seedCount*2<=8000 &&
-    bounded(m.deadlineMs,60000)&&bounded(m.runWallMs,60000)&&m.maxPlannedPlacements===8000&&m.maxEvents===16032&&m.maxArtifactBytes===33554432 &&
+    bounded(m.seedCount,8)&&m.seedSetReference===`${m.runId}-private-seeds` && bounded(m.maxPieces,1000)&&m.maxPieces*m.seedCount*2<=2000 &&
+    bounded(m.deadlineMs,60000)&&bounded(m.runWallMs,60000)&&m.maxPlannedPlacements===2000&&m.maxEvents===4032&&m.maxArtifactBytes===33554432 &&
+    m.plannedPlacements===m.maxPieces*m.seedCount*2 && m.plannedRunWallUpperBoundMs===m.runWallMs*m.seedCount*2 &&
+    m.plannedDecisionWaitUpperBoundMs===m.plannedPlacements*m.deadlineMs*(m.fallback==='none'?1:2) &&
     Array.isArray(m.players)&&m.players.length===2,'Incompatible benchmark manifest');
   for(const p of m.players) {
     assert(plain(p)&&['local','mock'].includes(p.kind)&&typeof p.name==='string'&&p.name.length>0&&p.name.length<=120&&typeof p.version==='string'&&p.version.length>0&&p.version.length<=120&&
@@ -91,9 +97,10 @@ function validateRecord(record,manifest) {
   const expectedSession=`${record.sessionId}-0`;
   const observation=o=>{
     assert(plain(o)&&o.sessionId===expectedSession&&o.schemaVersion===VERSIONS.observation&&o.rulesVersion===RULES.version&&
-      ['ready','playing','over'].includes(o.status)&&['score','lines','level','revision'].every(k=>Number.isSafeInteger(o[k])&&o[k]>=0)&&o.level===Math.floor(o.lines/RULES.linesPerLevel)+1&&
+      ['ready','playing','over','won'].includes(o.status)&&['score','lines','level','revision'].every(k=>Number.isSafeInteger(o[k])&&o[k]>=0)&&o.level===levelForLines(o.lines)&&
       o.width===10&&o.visibleHeight===20&&o.hiddenRows===0&&o.previewCount===5&&Array.isArray(o.next)&&o.next.length===5&&o.next.every(x=>RULES.types.includes(x))&&
       Array.isArray(o.board)&&o.board.length===20&&o.board.every(row=>Array.isArray(row)&&row.length===10&&row.every(x=>x===null||RULES.types.includes(x))),'Invalid observation identity/counters');
+    assert(o.terminalReason===terminalReason(o.status)&&(o.status==='won'?o.lines>=RULES.targetLines:o.lines<RULES.targetLines)&&(isTerminal(o.status)?o.active===null:true),'Invalid terminal observation');
   };
   observation(record.initialObservation);observation(record.finalObservation);
   assert(record.initialObservation.status==='ready'&&record.initialObservation.active===null&&record.initialObservation.revision===0&&record.initialObservation.score===0&&record.initialObservation.lines===0&&
@@ -157,7 +164,8 @@ async function runSingle(manifest, seed, seedIndex, lane, primary, signal) {
         consumedPiece: decision ? input.observation.active.type : null, latencyMs: performance.now()-stepStarted,
         providerReceipt:receiptOf(selected,input?.requestId), usage: usageOf(selected,input?.requestId), usageProvenance: selected.kind === 'mock' ? 'fixture-reported; not actual API usage' : 'local; no provider usage', actualCostUSD: null });
       events.push(event);
-      if (after.status === 'over') outcome = 'game-loss';
+      if (after.status === 'won') outcome = 'marathon-complete';
+      else if (after.status === 'over') outcome = 'game-loss';
       else if (after.pieces >= manifest.maxPieces) outcome = 'piece-cap';
       else if (signal?.aborted) outcome = 'cancelled';
       else if (wallExpired || performance.now()-started >= manifest.runWallMs) outcome = 'run-deadline';
@@ -179,10 +187,10 @@ async function runSingle(manifest, seed, seedIndex, lane, primary, signal) {
   return freeze(record);
 }
 const quantile = (values,q) => values.length ? [...values].sort((a,b)=>a-b)[Math.ceil(q*values.length)-1] : null;
-export function recomputeRun(record,manifest) {
+function recomputeCurrent(record,manifest) {
   const validateObservation=validateRecord(record,manifest);
   assert(record?.version === BENCHMARK_VERSION && manifest?.version===BENCHMARK_VERSION && Array.isArray(record.events) &&
-    ['game-loss','piece-cap','event-cap','cancelled','run-deadline','decision-timeout','budget-stop','provider-error'].includes(record.outcome), 'Unsupported run artifact');
+    ['marathon-complete','game-loss','piece-cap','event-cap','cancelled','run-deadline','decision-timeout','budget-stop','provider-error'].includes(record.outcome), 'Unsupported run artifact');
   assert([0,1].includes(record.lane) && manifest.players?.length===2 && ['none','local-heuristic-explicit'].includes(manifest.fallback),'Invalid run policy');
   let observation = record.initialObservation, pieces = 0, failures = 0, assisted = 0; const sequence = [], latencies = [], usage = {}, errorCounts={};
   // Earlier saved manifests did not declare fallback policy metadata. Preserve
@@ -190,7 +198,7 @@ export function recomputeRun(record,manifest) {
   let expectedRole='primary';const fallbackIdentity=manifest.fallbackProvider ?? {...identity(heuristic()), configuration:null};
   record.events.forEach((event,index) => {
     validateObservation(event.observationBefore);validateObservation(event.observationAfter);
-    assert(observation.status!=='over'&&observation.terminalReason===null&&pieces<manifest.maxPieces&&index<manifest.maxEvents,'Event follows terminal game or exhausted cap');
+    assert(!isTerminal(observation.status)&&observation.terminalReason===null&&pieces<manifest.maxPieces&&index<manifest.maxEvents,'Event follows terminal game or exhausted cap');
     assert(event.role===expectedRole && stableJSON(event.provider)===stableJSON(event.role==='primary'?manifest.players[record.lane]:fallbackIdentity),'Fallback role/provider attribution mismatch');
     assert(event.index === index && event.observationBeforeHash === digest(event.observationBefore) && event.observationAfterHash === digest(event.observationAfter) &&
       digest(observation) === event.observationBeforeHash, 'Broken observation chain');
@@ -203,7 +211,7 @@ export function recomputeRun(record,manifest) {
       const lines=event.observationAfter.lines-observation.lines;
       assert(event.consumedPiece===(observation.active?.type??observation.next[0])&&Number.isInteger(lines)&&lines>=0&&lines<=4&&event.observationAfter.score-observation.score===RULES.clearPoints[lines]*observation.level,'Inconsistent consumed piece or canonical score delta');
     } else assert(event.consumedPiece===null&&digest(event.observationAfter.board)===digest(observation.board)&&['score','lines','level'].every(k=>event.observationAfter[k]===observation[k]),'Failed attempt changed game/consumption');
-    if(event.observationAfter.status==='over'||pieces>=manifest.maxPieces||index+1>=manifest.maxEvents)assert(index===record.events.length-1,'Event after terminal transition');
+    if(isTerminal(event.observationAfter.status)||pieces>=manifest.maxPieces||index+1>=manifest.maxEvents)assert(index===record.events.length-1,'Event after terminal transition');
     expectedRole=event.committed?'primary':event.role==='primary'&&manifest.fallback==='local-heuristic-explicit'&&!['cancelled','timeout','budget'].includes(event.errorCode)?'fallback':'terminal';
     if(expectedRole==='terminal')assert(index===record.events.length-1,'Decision after terminal provider stop');
     assert(event.observationAfter.lines >= observation.lines && event.observationAfter.score >= observation.score,'Nonmonotonic game metric');
@@ -214,7 +222,8 @@ export function recomputeRun(record,manifest) {
   assert(record.lastFailureCode===(record.events.filter(e=>!e.committed).at(-1)?.errorCode??null),'Last failure code mismatch');
   assert(Number.isFinite(record.elapsedMs) && record.elapsedMs>=0,'Invalid elapsed time');
   const last=record.events.at(-1),over=record.finalObservation.status==='over';
-  if(over)assert(record.outcome==='game-loss'&&record.finalObservation.terminalReason==='blocked spawn','Top-out terminal precedence mismatch');
+  if(record.finalObservation.status==='won')assert(record.outcome==='marathon-complete'&&record.finalObservation.terminalReason===terminalReason('won'),'Marathon terminal precedence mismatch');
+  else if(over)assert(record.outcome==='game-loss'&&record.finalObservation.terminalReason==='blocked spawn','Top-out terminal precedence mismatch');
   else if(pieces>=manifest.maxPieces)assert(record.outcome==='piece-cap','Cap terminal precedence mismatch');
   else if(record.outcome==='event-cap')assert(record.events.length>=manifest.maxEvents,'Event cap not exhausted');
   else if(record.outcome==='cancelled')assert(record.control?.signalAborted===true||last?.errorCode==='cancelled','Cancellation evidence absent');
@@ -228,7 +237,7 @@ export function recomputeRun(record,manifest) {
     latency:{count:latencies.length,p50Ms:quantile(latencies,.5),p95Ms:quantile(latencies,.95)},elapsedMs:record.elapsedMs,
     fixtureUsage:Object.keys(usage).length?usage:null,actualCostUSD:null, costStatus:'unknown/not measured; no live requests',winner:null });
 }
-export function aggregatePairs(runs,manifest) {
+function aggregateCurrent(runs,manifest) {
   validateManifest(manifest);
   assert(Array.isArray(runs) && runs.length%2===0&&runs.length<=manifest.seedCount*2,'Complete bounded paired runs required');
   const pairs=[],seen=new Set();
@@ -254,12 +263,12 @@ export async function runPaired({ options, players, seeds, signal } = {}) {
   const artifact={manifest,runs,aggregate:aggregatePairs(pairedRuns,manifest),partial: runs.length!==seeds.length*2};
   return freeze({...artifact,artifactHash:digest(artifact)});
 }
-export async function replayRun(manifest, record, privateSeed) {
+async function replayCurrent(manifest, record, privateSeed) {
   validateRecord(record,manifest);
   assert(manifest?.version===BENCHMARK_VERSION && manifest.rulesVersion===RULES.version && manifest.promptVersion===BRIEF_VERSION &&
     stableJSON(manifest.schemas)===stableJSON(VERSIONS) && manifest.live===false && manifest.hold===false && manifest.previewCount===5 &&
     manifest.objective===RULES.objective && manifest.clock==='step-frozen-game-time' && manifest.assistance==='canonical-afterstates-v1' &&
-    manifest.initialBoard==='empty-10x20' && bounded(manifest.maxPieces,3000) && bounded(manifest.deadlineMs,60000) &&
+    manifest.initialBoard==='empty-10x20' && bounded(manifest.maxPieces,1000) && bounded(manifest.deadlineMs,60000) &&
     Number.isInteger(privateSeed) && privateSeed>0 && privateSeed<=0xffffffff && Array.isArray(manifest.players) && manifest.players.length===2 &&
     manifest.players.every(p=>['local','mock'].includes(p.kind)) && Number.isInteger(record.seedIndex) && record.seedIndex>=0 && record.seedIndex<manifest.seedCount &&
     [0,1].includes(record.lane) && record.sessionId===`${manifest.runId}-${record.seedIndex}-${record.lane}`,'Incompatible replay manifest');
@@ -276,17 +285,33 @@ export async function replayRun(manifest, record, privateSeed) {
   assert(digest(controller.view.observation)===digest(record.initialObservation),'Replay initial observation mismatch');
   for(const event of record.events){
     current=event; assert(digest(controller.view.observation)===event.observationBeforeHash,'Replay before mismatch');
-    controller.setProvider(event.role==='fallback'?{...replayProvider,name:'Local heuristic',kind:'local',version:'heuristic-1',capabilities:heuristic().capabilities}:replayProvider);
+    controller.setProvider(event.role==='fallback'?{...replayProvider,name:'Local heuristic',kind:'local',version:'heuristic-2',capabilities:heuristic().capabilities}:replayProvider);
     const result=await controller.step();
     assert(!replayMismatch,replayMismatch);
     assert(!!result===event.committed && digest(controller.view.observation)===event.observationAfterHash && controller.view.pieces===event.piecesAfter,'Replay transition mismatch');
   }
   const over=controller.view.status==='over';
   assert(digest(controller.view.observation)===digest(record.finalObservation),'Replay terminal observation mismatch');
-  if(over)assert(record.outcome==='game-loss','Top-out terminal precedence mismatch');
+  if(record.finalObservation.status==='won')assert(record.outcome==='marathon-complete'&&record.finalObservation.terminalReason===terminalReason('won'),'Marathon terminal precedence mismatch');
+  else if(over)assert(record.outcome==='game-loss','Top-out terminal precedence mismatch');
   else if(controller.view.pieces>=manifest.maxPieces)assert(record.outcome==='piece-cap','Cap terminal precedence mismatch');
   else assert(['cancelled','run-deadline','decision-timeout','budget-stop','provider-error','event-cap'].includes(record.outcome),'Unsupported terminal claim');
   controller.stop();
   return freeze({verified:true,observationHash:digest(record.finalObservation),outcome:record.outcome,metrics:recomputed,
     providerCalls:0,latencyReproduced:false,hashScope:'public observation and packet, not private engine/RNG state'});
+}
+
+// Historical artifacts bind packet hashes to the entire original v1 dependency bundle.
+// Dispatch is strict: no current endless configuration and no mixed version replay.
+function classic(manifest) {
+  return manifest?.version === 'offline-benchmark-1' && manifest.rulesVersion === 'local-classic-1';
+}
+export function recomputeRun(record, manifest) {
+  return classic(manifest) ? classicReplay.recomputeRun(record, manifest) : recomputeCurrent(record, manifest);
+}
+export function aggregatePairs(runs, manifest) {
+  return classic(manifest) ? classicReplay.aggregatePairs(runs, manifest) : aggregateCurrent(runs, manifest);
+}
+export async function replayRun(manifest, record, privateSeed) {
+  return classic(manifest) ? classicReplay.replayRun(manifest, record, privateSeed) : replayCurrent(manifest, record, privateSeed);
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mountVersus } from '../public/versus-ui.mjs';
-import { HumanVersus } from '../public/versus.mjs';
+import { HumanVersus, VERSUS_LIMITS } from '../public/versus.mjs';
 import { heuristic, mockProvider } from '../public/controller.mjs';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn){for(let n=0;n<200;n++){if(fn())return;await pause(5);}throw new Error('Versus UI did not settle.');}
@@ -51,7 +51,7 @@ test('capacity exhaustion stops live play but retained replay can pause, advance
   const f=fixture();let choices=0;const base=heuristic();
   const m=mountVersus(f.doc,{window:f.win,runnerFactory:options=>new HumanVersus({...options,providerFactory:()=>({...base,async decide(p){choices++;return base.decide(p);}})})});
   await f.$('v-start').trigger('click');
-  for(let n=0;n<5000&&!m.runner.view.archiveError;n++)m.runner.input(n%2?'left':'right');
+  for(let n=0;n<VERSUS_LIMITS.frames+1&&!m.runner.view.archiveError;n++)m.runner.input(n%2?'left':'right');
   assert(m.runner.view.archiveError);assert.equal(f.$('v-start').disabled,true);assert.equal(f.$('v-step').disabled,true);
   const count=m.runner.view.frameCount,decisions=choices,retainedExport=m.runner.exportRun();
   await f.$('v-replay').trigger('click');await f.$('v-pause').trigger('click');
@@ -61,4 +61,20 @@ test('capacity exhaustion stops live play but retained replay can pause, advance
   await f.$('v-start').trigger('click');assert.equal(m.runner.view.playback,true);assert.equal(m.runner.view.replayIndex,index+2);
   await f.$('v-pause').trigger('click');assert.equal(m.runner.view.frameCount,count);assert.equal(choices,decisions);
   assert.equal(m.runner.exportRun(),retainedExport);assert.equal(JSON.parse(m.runner.exportRun()).archiveIncomplete,true);m.dispose();
+});
+
+test('mounted versus terminal announcements interpolate Human and Algorithm without repeating a frozen winner',()=>{
+  const f=fixture();let emit;
+  const m=mountVersus(f.doc,{window:f.win,runnerFactory:options=>{emit=options.onChange;return new HumanVersus(options);}});
+  const terminal=(view,index,status)=>{
+    const lane=view.lanes[index];lane.status=status;lane.error=status==='error'?'Distinct algorithm failure':null;
+    lane.outcome={status,censored:status==='capped'||status==='error',reason:status==='won'?'300-line target reached':status==='over'?'blocked spawn':'piece cap'};
+    lane.observation={...lane.observation,active:null,status,lines:status==='won'?300:10,level:status==='won'?30:2};
+  };
+  const view=structuredClone(m.runner.view);view.state='completed';view.running=false;
+  terminal(view,0,'won');terminal(view,1,'capped');emit(view);
+  assert.match(f.$('v-announcement').textContent,/Human: Marathon complete/);assert.match(f.$('v-announcement').textContent,/Algorithm: Capped/);
+  assert(!/\[.*\]\[i\]/.test(f.$('v-announcement').textContent));
+  terminal(view,1,'error');emit(view);assert.match(f.$('v-announcement').textContent,/Algorithm: Error/);assert.doesNotMatch(f.$('v-announcement').textContent,/Human: Marathon complete/);
+  terminal(view,0,'over');emit(view);assert.match(f.$('v-announcement').textContent,/Human: Game over/);m.dispose();
 });

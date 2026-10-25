@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { ProviderError } from './providers.mjs';
 import { freeze, VERSIONS } from './public/harness.mjs';
-import { BRIEF_VERSION, validateChoice } from './public/briefing.mjs';
+import { BRIEF_VERSION, validatePacket, validateChoice } from './public/briefing.mjs';
 const fail = code => { throw new ProviderError(code); };
 const size = value => Buffer.byteLength(JSON.stringify(value));
 const definitions = freeze({
@@ -19,6 +19,7 @@ export function choiceCapabilities(protocol) {
     reasoningEffort: 'not configured: unsupported by this Choice request contract', serviceTier: 'not configured: unsupported by this Choice request contract' });
 }
 function packetCheck(packet, config) {
+  try { validatePacket(packet); } catch { fail('input'); }
   if (packet?.schemaVersion !== VERSIONS.decision || packet.rulesBrief?.version !== BRIEF_VERSION ||
       !Number.isInteger(packet.deadlineMs) || packet.deadlineMs < 1 || !packet.candidates?.length ||
       packet.candidates.length > config.maxCandidates || size(packet) > config.maxInputBytes ||

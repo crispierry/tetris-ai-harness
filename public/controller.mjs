@@ -1,20 +1,21 @@
-import { createGame, start, DEFAULT_SEED } from './engine.mjs';
+import { createGame, start, DEFAULT_SEED, isTerminal } from './engine.mjs';
 import { observe, enumerate, execute, candidateEvidence, freeze } from './harness.mjs';
 import { instructionPacket, validateChoice } from './briefing.mjs';
 export const HEURISTIC_WEIGHTS = Object.freeze({ holes: -5, aggregateHeight: -0.5, maxHeight: -0.2, bumpiness: -0.2, lines: 8 });
 export function heuristic(weights = HEURISTIC_WEIGHTS, name = 'Local heuristic') {
   const w = { ...HEURISTIC_WEIGHTS, ...weights };
   if (Object.values(w).some(v => !Number.isFinite(v))) throw new TypeError('Finite heuristic weights required');
-  const policy = freeze({ weights: Object.fromEntries(Object.keys(HEURISTIC_WEIGHTS).map(key => [key, w[key]])), terminalPenalty: -1e9, tieBreak: 'first offered candidate with maximum score' });
-  const runMetadata = freeze({ mode: 'local', policyVersion: 'heuristic-score-1', policy, liveEnabled: false });
-  return Object.freeze({ name, kind: 'local', version: 'heuristic-1', runMetadata,
+  const policy = freeze({ weights: Object.fromEntries(Object.keys(HEURISTIC_WEIGHTS).map(key => [key, w[key]])), terminalPenalty: -1e9, completionReward: 1e9, terminalOrder: 'completion, survival, blocked spawn; then score', tieBreak: 'first offered candidate with maximum score' });
+  const runMetadata = freeze({ mode: 'local', policyVersion: 'heuristic-score-2', policy, liveEnabled: false });
+  return Object.freeze({ name, kind: 'local', version: 'heuristic-2', runMetadata,
     capabilities: Object.freeze({ movementMode: 'reachable-paused-gravity-v1', assistance: 'canonical-afterstates-v1', maxCandidates: 800 }),
     async decide(packet) {
-      let selected = null, best = -Infinity;
+      let selected = null, best = -Infinity, bestRank = -Infinity;
       for (const c of packet.candidates) {
-        const f = c.features, score = c.terminalReason ? -1e9 :
+        const f = c.features, score = c.afterstate?.status === 'won' ? 1e9 : c.terminalReason ? -1e9 :
           w.holes * f.holes + w.aggregateHeight * f.aggregateHeight + w.maxHeight * f.maxHeight + w.bumpiness * f.bumpiness + w.lines * c.linesDelta;
-        if (score > best) { selected = c; best = score; }
+        const rank = c.afterstate?.status === 'won' ? 1 : c.terminalReason ? -1 : 0;
+        if (rank > bestRank || (rank === bestRank && score > best)) { selected = c; best = score; bestRank = rank; }
       }
       if (!selected) throw new Error('No legal candidate');
       return { requestId: packet.requestId, stateRevision: packet.stateRevision, selectedCandidateId: selected.id };
@@ -23,7 +24,7 @@ export function heuristic(weights = HEURISTIC_WEIGHTS, name = 'Local heuristic')
 export function mockProvider({ mode = 'delay', delayMs = 350 } = {}) {
   if (!['delay', 'error', 'stale', 'invalid', 'never'].includes(mode) || !Number.isInteger(delayMs) || delayMs < 0 || delayMs > 60000) throw new TypeError('Invalid mock settings');
   const local = heuristic();
-  return Object.freeze({ ...local, name: mode === 'delay' ? 'Delayed mock' : `${mode[0].toUpperCase() + mode.slice(1)} mock`, kind: 'mock', version: 'mock-1',
+  return Object.freeze({ ...local, name: mode === 'delay' ? 'Delayed mock' : `${mode[0].toUpperCase() + mode.slice(1)} mock`, kind: 'mock', version: 'mock-2',
     runMetadata: freeze({ ...local.runMetadata, mode: 'offline-mock', mockMode: mode, delayMs }),
     async decide(packet, { signal } = {}) {
       await new Promise((resolve, reject) => {
@@ -56,14 +57,14 @@ export class Controller {
     if (!provider || typeof provider.decide !== 'function' || typeof provider.name !== 'string' || !provider.name || !Number.isInteger(provider.capabilities?.maxCandidates) || provider.capabilities.maxCandidates < 1 || provider.capabilities.maxCandidates > 800 || provider.capabilities?.movementMode !== 'reachable-paused-gravity-v1' || provider.capabilities?.assistance !== 'canonical-afterstates-v1') throw new Error('Unsupported provider capability');
     this.#provider = provider;
   }
-  #cancel(status) { const pending = this.#pending; this.#pending = null; pending?.abort.abort(); this.#status = this.#state.status === 'over' ? 'over' : status; this.#emit(); }
+  #cancel(status) { const pending = this.#pending; this.#pending = null; pending?.abort.abort(); this.#status = isTerminal(this.#state.status) ? this.#state.status : status; this.#emit(); }
   pause() { this.#cancel('paused'); }
   stop() { this.#cancel('stopped'); }
   reset() { this.#cancel('stopped'); this.#epoch++; this.#revision = 0; this.#state = createGame(this.#seed); this.#pieces = 0; this.#last = null; this.#error = null; this.#status = 'ready'; this.#emit(); }
-  start() { if (this.#pending) throw new Error('Decision already in progress'); if (this.#state.status === 'over') return; this.#error = null; this.#status = 'running'; this.#emit(); }
+  start() { if (this.#pending) throw new Error('Decision already in progress'); if (isTerminal(this.#state.status)) return; this.#error = null; this.#status = 'running'; this.#emit(); }
   async step({ continueRunning = false } = {}) {
     if (this.#pending) throw new Error('Decision already in progress');
-    if (this.#state.status === 'over') return null;
+    if (isTerminal(this.#state.status)) return null;
     if (this.#state.status === 'ready') { this.#state = start(this.#state); this.#revision++; }
     const binding = this.#binding, current = this.#state, abort = new AbortController();
     const job = { abort, requestId: `${binding.sessionId}:${binding.revision}:${++this.#serial}` };
@@ -83,12 +84,13 @@ export class Controller {
       });
       const response = await Promise.race([Promise.resolve().then(() => this.#provider.decide(packet, { signal: abort.signal })), guard]);
       if (this.#pending !== job || abort.signal.aborted || this.#revision !== binding.revision) return null;
+      if (performance.now() - started >= this.#deadline) throw new Error('Decision deadline exceeded');
       if (new TextEncoder().encode(JSON.stringify(response)).length > 4096) throw new Error('Decision response exceeds size limit');
       const id = validateChoice(packet, response), candidate = candidates.find(c => c.id === id);
       const next = execute(current, candidate, binding), evidence = packet.candidates.find(c => c.id === id);
       this.#state = next; this.#revision++; this.#pieces++;
       this.#last = freeze({ candidate: evidence, latencyMs: performance.now() - started, requestId: job.requestId, player: this.#provider.name });
-      this.#status = next.status === 'over' ? 'over' : continueRunning ? 'running' : 'paused';
+      this.#status = isTerminal(next.status) ? next.status : continueRunning ? 'running' : 'paused';
       return this.#last;
     } catch (error) {
       if (this.#pending !== job) return null;

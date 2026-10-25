@@ -8,13 +8,13 @@ const plain = config => new Comparison({ config: { left: 'local', right: 'local'
 
 test('all settings reject over-cap, fractional, unavailable and unknown inputs before decisions', () => {
   assert.deepEqual(validateConfig(), DEFAULT_CONFIG); assert(Object.isFrozen(validateConfig()));
-  for (const [key, max] of [['samples',8],['pieceCap',100],['paceMs',1000],['nodeCap',4000],['timeMs',1000]]) {
+  for (const [key, max] of [['samples',8],['pieceCap',1000],['paceMs',1000],['nodeCap',4000],['timeMs',1000]]) {
     for (const value of [0, max + 1, 1.5, Infinity, '2']) assert.throws(() => validateConfig({ [key]: value }), new RegExp(key));
   }
   assert.throws(() => validateConfig({ paceMs: 29 }), /paceMs/);
   for (const player of ['Astra','Decisions','Jev','__proto__']) assert.throws(() => validateConfig({ left: player }), /unavailable/);
   assert.throws(() => validateConfig({ seed: 123 }), /Unknown/); assert.throws(() => validateConfig(null), /object/);
-  assert.equal(validateConfig({ samples:8, pieceCap:100 }).samples * 2 * 100, LIMITS.placements);
+  assert.equal(validateConfig({ samples:1, pieceCap:1000 }).samples * 2 * 1000, LIMITS.placements);
 });
 
 test('Step makes exactly one decision per eligible independent lane and settings lock until Reset', async () => {
@@ -32,7 +32,7 @@ test('Step makes exactly one decision per eligible independent lane and settings
   await c.step(); assert.equal(c.view.sample,2); assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]); assert.equal(identities.length,4);
   await c.step(); assert.equal(c.view.state,'completed'); assert.equal(c.view.summary.observedPairs,2); assert.equal(c.view.summary.missingPairs,0);
   await c.step(); assert.equal(packets.length,8);
-  c.stop(); assert(c.view.lanes.every(l=>l.status==='completed')); c.pause(); assert(c.view.lanes.every(l=>l.outcome));
+  c.stop(); assert(c.view.lanes.every(l=>l.status==='capped')); c.pause(); assert(c.view.lanes.every(l=>l.outcome));
   c.reset(); assert.equal(c.view.locked,false); await c.step(); assert.deepEqual(c.view.lanes[0].observation.board,firstBoard); c.dispose();
 });
 
@@ -41,7 +41,7 @@ test('slow lane never paces its peer; sample replacement waits for both terminal
   const c=new Comparison({config:{right:'local',samples:2,pieceCap:2,paceMs:30},providerFactory:(key,config,{lane,sample})=>
     lane===0&&sample===1 ? {...base,decide:packet=>new Promise(resolve=>{release=async()=>resolve(await base.decide(packet));})} : heuristic()});
   c.start(); await until(()=>c.view.lanes[1].pieces===2);
-  assert.equal(c.view.sample,1); assert.equal(c.view.lanes[0].pieces,0); assert.equal(c.view.lanes[1].status,'completed');
+  assert.equal(c.view.sample,1); assert.equal(c.view.lanes[0].pieces,0); assert.equal(c.view.lanes[1].status,'capped');
   await release(); await until(()=>c.view.lanes[0].pieces===1); await until(()=>typeof release==='function');
   // A new choice gets a fresh resolver; the peer's final board remains stable.
   const peer=c.view.lanes[1].observation.board; await pause(60); assert.deepEqual(c.view.lanes[1].observation.board,peer);
@@ -83,7 +83,7 @@ test('saved visual replay makes no new decisions; exported own frames are immuta
   const changed=record.frames[2].pieces; record.frames[2].pieces=999; assert.equal(JSON.parse(c.exportRun()).frames[2].pieces,changed);
   c.replay(); c.pause(); while(c.view.replayIndex+1<c.view.frameCount)await c.step();
   assert.equal(decisions,expected); assert.equal(c.view.lanes[0].status,'replay'); assert.equal(c.view.lanes[0].pieces,2);
-  assert.equal(c.view.lanes[0].recordedStatus,'completed'); assert(Object.isFrozen(c.view.lanes[0]));
+  assert.equal(c.view.lanes[0].recordedStatus,'capped'); assert(Object.isFrozen(c.view.lanes[0]));
   assert.equal(JSON.parse(c.exportRun()).frames.length,6); c.dispose();
 });
 
@@ -96,12 +96,12 @@ test('automatic two-sample run ends at caps and a disposed session cannot wake t
 test('immutable saved policy identifies evaluator, all search limits and visible horizon in live/replay/export details', async () => {
   const c=new Comparison({config:{left:'look1',right:'look2',nodeCap:1,timeMs:1000}});await c.step();
   const record=JSON.parse(c.exportRun());assert.equal(record.policies.length,2);
-  for(const entry of record.policies){const p=entry.policy;assert.equal(p.evaluator.version,'local-leaf-value-1');
+  for(const entry of record.policies){const p=entry.policy;assert.equal(p.evaluator.version,'local-leaf-value-2');
     assert.equal(p.callCap,1);assert.equal(p.nodeCap,1);assert.equal(p.timeMs,1000);assert.equal(p.maxOutputBytes,2097152);
     assert.equal(p.discount,.9);assert.match(p.horizon,/at most one known next placement/);assert.match(p.tieOrder,/Original root/);
     assert.equal(p.evaluator.policy.weights.holes,-5);assert.equal(p.live,false);assert.equal(p.pruning,'none; every offered root and reachable child within caps');}
   assert.deepEqual(record.policies.map(p=>p.policy.depth),[1,2]);
   assert(record.frames.every(f=>record.policies.some(p=>p.id===f.policyId)));
   assert(Object.isFrozen(c.view.lanes[0].policy.evaluator.policy.weights));
-  c.replay();c.pause();assert.equal(c.view.lanes[0].policy.evaluator.version,'local-leaf-value-1');c.dispose();
+  c.replay();c.pause();assert.equal(c.view.lanes[0].policy.evaluator.version,'local-leaf-value-2');c.dispose();
 });

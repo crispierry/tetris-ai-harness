@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mountComparison } from '../public/comparison-ui.mjs';
-import { DEFAULT_CONFIG } from '../public/comparison.mjs';
+import { Comparison, DEFAULT_CONFIG } from '../public/comparison.mjs';
 class Element {
   constructor(){this.children=[];this.attributes={};this.listeners={};this.value='';this.textContent='';this.disabled=false;this.hidden=false;}
   append(...nodes){this.children.push(...nodes);} replaceChildren(...nodes){this.children=[...nodes];}
@@ -17,7 +17,7 @@ function fixture(){const nodes=new Map(),listeners={};const $=id=>{if(!nodes.has
 test('actual facade UI controls validate, lock, retain errors, replay without decisions and export the same saved run',async()=>{
   const {$,doc}=fixture();let exported;const c=mountComparison(doc,{onExport:json=>{exported=JSON.parse(json);}});
   assert.equal($('c-0-board').children.length,200); assert.equal($('c-start').disabled,false);
-  assert.match($('c-1-details').textContent,/local-leaf-value-1/);assert.match($('c-1-details').textContent,/maxOutputBytes/);
+  assert.match($('c-1-details').textContent,/local-leaf-value-2/);assert.match($('c-1-details').textContent,/maxOutputBytes/);
   $('c-samples').value='9';await $('c-step').trigger('click'); assert.match($('c-error').textContent,/samples/);assert.equal(c.view.locked,false);
   $('c-samples').value='1';$('c-left').value='error';$('c-right').value='local';$('c-pieceCap').value='2';
   await $('c-step').trigger('click'); assert.equal($('c-0-status').textContent,'Error'); assert.equal($('c-1-pieces').textContent,'1');
@@ -38,4 +38,20 @@ test('automatic waiting can be paused and reset, visibility hides cancel work, n
   await $('c-start').trigger('click');await until(()=>$('c-0-status').textContent==='Choosing…');doc.hidden=true;listeners.visibilitychange();
   assert.equal(c.view.auto,false);await $('c-reset').trigger('click');await pause(300);assert.equal($('c-0-pieces').textContent,'0');
   assert.equal(listeners.keydown,undefined);assert.equal($('c-pause').disabled,true);c.dispose();
+});
+
+test('mounted comparison terminal announcements interpolate each lane identity and announce a frozen winner once',()=>{
+  const {$,doc}=fixture();let emit;
+  const c=mountComparison(doc,{comparisonFactory:options=>{emit=options.onChange;return new Comparison(options);}});
+  const terminal=(view,index,status)=>{
+    const lane=view.lanes[index];lane.status=status;lane.error=status==='error'?'Distinct right failure':null;
+    lane.outcome={status,censored:status==='capped'||status==='error',reason:status==='won'?'300-line target reached':status==='over'?'blocked spawn':'piece cap'};
+    lane.observation={...lane.observation,active:null,status,lines:status==='won'?300:10,level:status==='won'?30:2};
+  };
+  const view=structuredClone(c.view);view.state='completed';view.locked=true;
+  terminal(view,0,'won');terminal(view,1,'capped');emit(view);
+  assert.match($('c-announcement').textContent,/Left: Marathon complete/);assert.match($('c-announcement').textContent,/Right: Capped/);
+  assert(!/\[.*\]\[i\]/.test($('c-announcement').textContent));
+  terminal(view,1,'error');emit(view);assert.match($('c-announcement').textContent,/Right: Error/);assert.doesNotMatch($('c-announcement').textContent,/Left: Marathon complete/);
+  terminal(view,0,'over');emit(view);assert.match($('c-announcement').textContent,/Left: Game over/);c.dispose();
 });

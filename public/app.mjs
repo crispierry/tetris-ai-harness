@@ -3,22 +3,23 @@ import {
   tick, togglePause, cells,
 } from './engine.mjs';
 
-const formatNumber = new Intl.NumberFormat().format;
+import { MARATHON_COPY, linesProgress, outcomeDetail, formatNumber } from './marathon.mjs';
 
 // Player-facing copy stays together; HTML supplies the document structure.
 const COPY = {
-  eyebrow: 'LOCAL ARCADE', title: 'Tetris', intro: 'Stack pieces. Clear lines. Keep going.',
+  eyebrow: 'LOCAL ARCADE', title: 'Tetris', intro: MARATHON_COPY.intro,
   playfield: 'Playfield', start: 'Start game', pause: 'Pause', resume: 'Resume',
   newGame: 'New game', score: 'Score', lines: 'Lines', level: 'Level', next: 'Up next',
   controls: 'Keyboard controls', move: 'Move', softDrop: 'Soft drop', rotate: 'Rotate clockwise',
   hardDrop: 'Hard drop', pauseResume: 'Pause / resume', or: 'or', space: 'Space',
   focusHelp: 'Click the board to focus. Leaving the game pauses play.',
-  helpNote: 'Desktop keyboard play. Clear full rows to score; every 10 lines raises the level.',
-  status: { ready: 'Ready', playing: 'Playing', paused: 'Paused', over: 'Game over' },
+  helpNote: 'Desktop keyboard play. Clear full rows to reach the 300-line target.',
+  status: { ready: 'Ready', playing: 'Playing', paused: 'Paused', over: 'Game over', won: MARATHON_COPY.complete },
   overlay: {
     ready: ['Ready?', 'Start a game to begin.'],
     paused: ['Paused', 'Choose Resume when you’re ready.'],
-    over: ['Game over', 'Start a new game to try again.'],
+    over: ['Game over', 'Blocked spawn. Start a new game to try again.'],
+    won: [MARATHON_COPY.complete, ''],
   },
   piece: type => `${type} piece`,
   board: (state, count) => `20 rows by 10 columns. ${count} locked cells. ${state.active ? `Falling ${state.active.type} piece, row ${state.active.y + 1}, column ${state.active.x + 1}.` : 'No falling piece.'}`,
@@ -100,7 +101,7 @@ function render(previous) {
   previewCells.forEach((cell, index) => paintCell(cell, occupiedPreview.has(`${index % 4},${Math.floor(index / 4)}`) ? nextType : null));
   nextDescription.textContent = nextType ? COPY.piece(nextType) : '';
   score.textContent = formatNumber(state.score);
-  lines.textContent = formatNumber(state.lines);
+  lines.textContent = linesProgress(state.lines);
   level.textContent = formatNumber(state.level);
   status.textContent = COPY.status[state.status];
   status.dataset.state = state.status;
@@ -108,20 +109,20 @@ function render(previous) {
   boardDescription.textContent = COPY.board(state, lockedCount);
   board.setAttribute('aria-label', boardDescription.textContent);
   startButton.hidden = state.status !== 'ready';
-  pauseButton.hidden = state.status === 'ready' || state.status === 'over';
-  pauseButton.disabled = state.status === 'over';
+  pauseButton.hidden = ['ready','over','won'].includes(state.status);
+  pauseButton.disabled = ['over','won'].includes(state.status);
   pauseButton.textContent = state.status === 'paused' ? COPY.resume : COPY.pause;
   newButton.hidden = state.status === 'ready';
   overlay.hidden = state.status === 'playing';
   if (!overlay.hidden) {
     const [title, detail] = COPY.overlay[state.status];
     element('overlay-title').textContent = title;
-    element('overlay-detail').textContent = detail;
+    element('overlay-detail').textContent = state.status === 'won' ? outcomeDetail('won', state) : detail;
   }
 
   // Announce meaningful changes only, never gravity/movement frames.
   const messages = [];
-  if (!previous || previous.status !== state.status) messages.push(COPY.status[state.status] + '.');
+  if (!previous || previous.status !== state.status) messages.push((state.status === 'won' ? 'Manual: ' : '') + COPY.status[state.status] + '.');
   if (previous && state.lines > previous.lines) messages.push(COPY.lineClear(state.lines - previous.lines));
   if (!previous || previous.score !== state.score || previous.lines !== state.lines || previous.level !== state.level || previous.status !== state.status) {
     messages.push(COPY.progress(state));

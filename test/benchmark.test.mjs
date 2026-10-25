@@ -28,7 +28,7 @@ test('new fallback policy is bound while historical null-metadata fallback repla
 test('paired runs isolate games/providers, preserve ordinal sequences across delays, and expose recomputable metrics',async()=>{
  const artifact=await runPaired({options:options(),players:players(),seeds:[1,2]});
  assert.equal(artifact.runs.length,4);assert.equal(artifact.aggregate.sampleCount,2);assert.equal(artifact.partial,false);
- assert.equal(artifact.manifest.objective,'endless score and survival');assert.equal(artifact.manifest.hold,false);
+ assert.equal(artifact.manifest.objective,'clear 300 lines');assert.equal(artifact.manifest.hold,false);
  for(const run of artifact.runs){
   assert.equal(run.outcome,'piece-cap');assert.equal(run.metrics.pieces,12);assert.equal(run.metrics.censored,true);
   assert.deepEqual(recomputeRun(clone(run),artifact.manifest),run.metrics);assert.equal(run.metrics.winner,null);assert.equal(run.metrics.actualCostUSD,null);
@@ -96,8 +96,12 @@ test('cancelled and wall-deadline runs commit no late result or fallback',async(
  for(const run of expired.runs){assert.equal(run.outcome,'run-deadline');assert.equal(run.metrics.pieces,0);}
 });
 test('top-out on the exact cap-reaching placement remains game loss, never censoring or victory',async()=>{
- const artifact=await runPaired({options:options({maxPieces:1008,deadlineMs:5000,runWallMs:30000}),players:[{create:()=>heuristic()},{create:()=>heuristic()}],seeds:[2]});
- for(const run of artifact.runs){assert.equal(run.metrics.pieces,1008);assert.equal(run.outcome,'game-loss');assert.equal(run.metrics.censored,false);assert.equal(run.finalObservation.terminalReason,'blocked spawn');}
+ const first=()=>({...heuristic(),async decide(p){return{requestId:p.requestId,stateRevision:p.stateRevision,selectedCandidateId:p.candidates[0].id};}});
+ const players=[{create:first},{create:first}];
+ const baseline=await runPaired({options:options({maxPieces:1000}),players,seeds:[2]});
+ const exactCap=baseline.runs[0].metrics.pieces;assert(exactCap>1 && exactCap<1000);
+ const artifact=await runPaired({options:options({maxPieces:exactCap}),players,seeds:[2]});
+ for(const run of artifact.runs){assert.equal(run.metrics.pieces,exactCap);assert.equal(run.outcome,'game-loss');assert.equal(run.metrics.censored,false);assert.equal(run.finalObservation.terminalReason,'blocked spawn');}
  assert((await replayRun(artifact.manifest,artifact.runs[0],2)).verified);
 });
 test('per-decision fixture metadata and usage belong to the current request and exclude raw secrets',async()=>{

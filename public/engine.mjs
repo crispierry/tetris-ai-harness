@@ -3,14 +3,17 @@ export const DEFAULT_SEED = 0x6d2b79f5;
 export const BOARD_WIDTH = 10;
 export const BOARD_HEIGHT = 20;
 export const RULES = Object.freeze({
-  version: 'local-classic-1', width: BOARD_WIDTH, height: BOARD_HEIGHT, hiddenRows: 0,
+  version: 'local-marathon-2', width: BOARD_WIDTH, height: BOARD_HEIGHT, hiddenRows: 0,
   types: Object.freeze(['I', 'O', 'T', 'S', 'Z', 'J', 'L']),
   kicks: Object.freeze([0, -1, 1, -2, 2]), clearPoints: Object.freeze([0, 100, 300, 500, 800]),
   linesPerLevel: 10, gravityStartMs: 800, gravityFactor: 0.85, minimumGravityMs: 100,
   previewCount: 5, rotation: 'clockwise square matrix', immediateLock: true,
-  objective: 'endless score and survival', randomizer: 'seeded seven-bag',
+  objective: 'clear 300 lines', targetLines: 300, startLevel: 1, maxLevel: 30, randomizer: 'seeded seven-bag',
   hold: false, ghost: false, spins: false, combos: false, lockDelayMs: 0,
 });
+export const levelForLines = lines => Math.min(RULES.maxLevel, RULES.startLevel + Math.floor(lines / RULES.linesPerLevel));
+export const isTerminal = status => status === 'over' || status === 'won';
+export const terminalReason = status => status === 'won' ? '300-line target reached' : status === 'over' ? 'blocked spawn' : null;
 const TYPES = RULES.types;
 const SHAPES = {
   I: ['0000', '1111', '0000', '0000'],
@@ -107,9 +110,10 @@ function lock(state) {
   const cleared = BOARD_HEIGHT - remaining.length;
   while (remaining.length < BOARD_HEIGHT) remaining.unshift(emptyRow());
   const lines = state.lines + cleared;
-  return spawn({ ...state, board: remaining, lines, level: 1 + Math.floor(lines / RULES.linesPerLevel),
-    score: state.score + RULES.clearPoints[cleared] * state.level,
-    gravityElapsed: 0 });
+  const settled = { ...state, board: remaining, lines, level: levelForLines(lines),
+    score: state.score + RULES.clearPoints[cleared] * state.level, gravityElapsed: 0 };
+  // A complete canonical clear wins before consuming/refilling the next queue.
+  return lines >= RULES.targetLines ? { ...settled, active: null, status: 'won' } : spawn(settled);
 }
 
 export function move(state, dx) {
