@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGame, start, RULES } from '../public/engine.mjs';
 import { observe, enumerate, candidateEvidence } from '../public/harness.mjs';
-import { briefing, workedExamples, instructionPacket, validateChoice } from '../public/briefing.mjs';
+import { briefing, workedExamples, instructionPacket, validateChoice, semanticPacket } from '../public/briefing.mjs';
 test('rules briefing derives numeric facts and all geometry from canonical exports',()=>{
  const brief=briefing();assert.equal(brief.rules,RULES);assert.equal(brief.rules.version,brief.rulesVersion);
  assert.equal(brief.geometry.length,7);assert.equal(brief.rules.hold,false);assert.equal(brief.rules.hiddenRows,0);
@@ -28,4 +28,17 @@ test('offline mock receives self-contained bounded instruction packet and valida
  for(const bad of [{...mock(packet),requestId:'old'},{...mock(packet),stateRevision:1},{...mock(packet),selectedCandidateId:'made-up'},{...mock(packet),extra:true}])assert.throws(()=>validateChoice(packet,bad));
  assert.throws(()=>instructionPacket({...packet.observation,rng:123},candidates,{requestId:'r2',deadlineMs:1000}),/Private/);
  assert.throws(()=>instructionPacket(packet.observation,candidates,{requestId:'r2',deadlineMs:0}));
+});
+
+test('semantic game evidence and object response instructions have separate versioned contracts', () => {
+ const state=start(createGame()),binding={sessionId:'format-separation',revision:2};
+ const candidates=enumerate(state,binding).map(c=>candidateEvidence(state,c,binding));
+ const packet=instructionPacket(observe(state,binding),candidates,{requestId:'format-request',deadlineMs:1000});
+ assert.equal(packet.schemaVersion,3);assert.equal(packet.rulesBrief.version,'local-rules-brief-3');
+ assert.match(packet.responseInstructions,/Return only requestId, stateRevision and selectedCandidateId/);
+ assert(!packet.rulesBrief.instructions.some(s=>/response schema|Return only|selectedCandidateId/.test(s)));
+ const game=semanticPacket(packet);assert.equal(game.observation,packet.observation);assert.equal(game.candidates,packet.candidates);
+ assert.equal(game.responseSchema,undefined);assert.equal(game.responseInstructions,undefined);assert.equal(game.requestId,undefined);
+ assert(Object.isFrozen(game));
+ for(const id of [null,1,''])assert.throws(()=>instructionPacket(packet.observation,[{...candidates[0],id}],{requestId:'invalid-id',deadlineMs:1000}));
 });

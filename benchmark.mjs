@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Controller, heuristic } from './public/controller.mjs';
 import * as classicReplay from './legacy/classic-v1/benchmark.mjs';
+import * as marathonReplay from './legacy/marathon-v2/benchmark.mjs';
 import { RULES, levelForLines, isTerminal, terminalReason } from './public/engine.mjs';
 import { VERSIONS, freeze } from './public/harness.mjs';
 import { BRIEF_VERSION } from './public/briefing.mjs';
@@ -301,17 +302,25 @@ async function replayCurrent(manifest, record, privateSeed) {
     providerCalls:0,latencyReproduced:false,hashScope:'public observation and packet, not private engine/RNG state'});
 }
 
-// Historical artifacts bind packet hashes to the entire original v1 dependency bundle.
+// Historical artifacts bind packet hashes to their entire original dependency bundle.
 // Dispatch is strict: no current endless configuration and no mixed version replay.
 function classic(manifest) {
   return manifest?.version === 'offline-benchmark-1' && manifest.rulesVersion === 'local-classic-1';
 }
+function historicalMarathon(manifest) {
+  return manifest?.version === 'offline-benchmark-2' && manifest.rulesVersion === 'local-marathon-2' &&
+    manifest.promptVersion === 'local-rules-brief-2' &&
+    stableJSON(manifest.schemas) === stableJSON({ observation: 2, candidate: 2, features: 1, decision: 2 });
+}
 export function recomputeRun(record, manifest) {
+  if (historicalMarathon(manifest)) return marathonReplay.recomputeRun(record, manifest);
   return classic(manifest) ? classicReplay.recomputeRun(record, manifest) : recomputeCurrent(record, manifest);
 }
 export function aggregatePairs(runs, manifest) {
+  if (historicalMarathon(manifest)) return marathonReplay.aggregatePairs(runs, manifest);
   return classic(manifest) ? classicReplay.aggregatePairs(runs, manifest) : aggregateCurrent(runs, manifest);
 }
 export async function replayRun(manifest, record, privateSeed) {
+  if (historicalMarathon(manifest)) return marathonReplay.replayRun(manifest, record, privateSeed);
   return classic(manifest) ? classicReplay.replayRun(manifest, record, privateSeed) : replayCurrent(manifest, record, privateSeed);
 }
