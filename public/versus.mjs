@@ -3,7 +3,27 @@ import { Controller, heuristic, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { observe, freeze } from './harness.mjs';
 
 export const VERSUS_VERSION = 'human-local-versus-2';
-export const VERSUS_LIMITS = freeze({ pieces: 1000, frames: 4000, exportBytes: 8 * 1024 * 1024, deadlineMs: 1500 });
+// Finite normal-play envelope: 40 human input/gravity frames per placement,
+// one algorithm frame per placement, plus lifecycle headroom. Further corrections
+// still consume the same strict shared capacity; no frames are silently discarded.
+export const VERSUS_RECORDING_PROFILE = freeze({ version: 'versus-recording-2',
+  humanFramesPerPlacement: 40, algorithmFramesPerPlacement: 1, lifecycleFrames: 8000,
+  humanFrameBytes: 1024, algorithmFrameBytes: 4096, lifecycleFrameBytes: 2048,
+  meaning: 'Normal-play admission estimates, not an unlimited correction or per-frame size guarantee; actual frame/byte guards always apply.' });
+export const VERSUS_LIMITS = freeze({ pieces: 1000, frames: 50000, exportBytes: 64 * 1024 * 1024,
+  metadataReserveBytes: 160 * 1024, terminalReserveFrames: 4, deadlineMs: 1500,
+  recordingProfile: VERSUS_RECORDING_PROFILE });
+export function versusRecordingAdmission(pieceCap = VERSUS_LIMITS.pieces) {
+  if (!Number.isInteger(pieceCap) || pieceCap < 1 || pieceCap > VERSUS_LIMITS.pieces) throw new RangeError('Bounded piece cap required for recording admission.');
+  const p = VERSUS_RECORDING_PROFILE;
+  return freeze({ profileVersion: p.version,
+    plannedHumanFrames: pieceCap * p.humanFramesPerPlacement,
+    plannedAlgorithmFrames: pieceCap * p.algorithmFramesPerPlacement,
+    lifecycleFrameAllowance: p.lifecycleFrames,
+    plannedFrames: pieceCap * (p.humanFramesPerPlacement + p.algorithmFramesPerPlacement) + p.lifecycleFrames,
+    plannedBytes: pieceCap * (p.humanFramesPerPlacement * p.humanFrameBytes + p.algorithmFramesPerPlacement * p.algorithmFrameBytes) +
+      p.lifecycleFrames * p.lifecycleFrameBytes + VERSUS_LIMITS.metadataReserveBytes });
+}
 const size = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const clone = value => JSON.parse(JSON.stringify(value));
 const snapshot = o => ({ board: o.board.map(row => row.map(c => c ?? '.').join('')), active: o.active,
@@ -63,13 +83,13 @@ export class HumanVersus {
   }
   #capacity() {
     if (this.#archiveError) return false;
-    if (this.#frames.length >= VERSUS_LIMITS.frames - 4 || this.#bytes >= VERSUS_LIMITS.exportBytes - 163840) {
+    if (this.#frames.length >= VERSUS_LIMITS.frames - VERSUS_LIMITS.terminalReserveFrames || this.#bytes >= VERSUS_LIMITS.exportBytes - VERSUS_LIMITS.metadataReserveBytes) {
       this.#haltArchive(); return false;
     }
     return true;
   }
   #haltArchive() {
-    this.#archiveError = 'Saved recording capacity reached. Play stopped; replay/export contain only retained frames.';
+    this.#archiveError = 'Saved recording capacity reached. Play stopped; unfinished lanes are censored, not Marathon completions. Replay/export contain only retained frames.';
     this.#state = 'stopped'; this.#fence(true); this.#emit();
   }
   #record(lane, event) {
@@ -79,7 +99,7 @@ export class HumanVersus {
       pieces: v.pieces, player: v.player, outcome: v.outcome, error: v.error?.slice(0, 500) ?? null,
       lastDecision: decision(v.lastDecision), policyIndex: lane }));
     const bytes = size(frame);
-    if (this.#frames.length >= VERSUS_LIMITS.frames || this.#bytes + bytes > VERSUS_LIMITS.exportBytes - 131072) { this.#haltArchive(); return; }
+    if (this.#frames.length >= VERSUS_LIMITS.frames || this.#bytes + bytes > VERSUS_LIMITS.exportBytes - VERSUS_LIMITS.metadataReserveBytes) { this.#haltArchive(); return; }
     this.#frames.push(frame); this.#bytes += bytes;
   }
   #beginRecording() {
@@ -182,19 +202,19 @@ export class HumanVersus {
   }
   exportRun() {
     const record = { version: VERSUS_VERSION, frameVersion: 1, rulesVersion: RULES.version,
-      objective: RULES.objective, admission: { plannedPlacements: 2 * this.#pieceCap,
+      objective: RULES.objective, admission: { recording: versusRecordingAdmission(this.#pieceCap), plannedPlacements: 2 * this.#pieceCap,
         maximumAlgorithmDecisionWaitMs: this.#pieceCap * VERSUS_LIMITS.deadlineMs,
         maximumAlgorithmPaceWaitMs: this.#pieceCap * this.#paceMs,
-        maxFrames: VERSUS_LIMITS.frames, maxExportBytes: VERSUS_LIMITS.exportBytes,
+        maxFrames: VERSUS_LIMITS.frames, maxExportBytes: VERSUS_LIMITS.exportBytes, metadataReserveBytes: VERSUS_LIMITS.metadataReserveBytes,
         observedAlgorithmAttemptMs: this.#algorithmElapsedMs, observedHumanGravityMs: this.#humanGravityMs,
         meaning: 'Planned waits bound algorithm work, not human wall time. Human input/gravity recording shares finite frame/byte capacity. Paused time has no expiry.' }, limits: this.view.limits, policies: this.#policies(), frames: this.#frames,
-      outcomes: [this.#humanOutcome, this.#aiOutcome], archiveIncomplete: !!this.#archiveError, archiveError: this.#archiveError,
+      outcomes: [this.#humanOutcome, this.#aiOutcome], archiveIncomplete: !!this.#archiveError, archiveCensored: !!this.#archiveError, archiveError: this.#archiveError,
       provenance: { players: 'Human keyboard and local/mock algorithm only', liveProviders: false, modelCalls: 0, actualCostUSD: null,
         pairing: 'Same private deterministic ordinal sequence; seeds and hidden queue omitted',
         timing: 'Independent human gravity and algorithm pace; descriptive, not a fair race or winner claim',
         replay: 'Own saved visual frames only; no new choices or canonical Node verification' } };
     const json = JSON.stringify(record);
-    if (new TextEncoder().encode(json).length > VERSUS_LIMITS.exportBytes) throw new Error('Export exceeds eight MiB; no file created.');
+    if (new TextEncoder().encode(json).length > VERSUS_LIMITS.exportBytes) throw new Error('Export exceeds 64 MiB; no file created.');
     return json;
   }
   dispose() { this.#onChange = () => {}; this.#state = 'stopped'; this.#fence(true); }

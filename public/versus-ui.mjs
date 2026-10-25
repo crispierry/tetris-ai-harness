@@ -54,7 +54,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     if (announcement !== previousAnnouncement) {
       const laneStates = view.lanes.map(l => ['running','playing','choosing'].includes(l.status) ? 'active' : l.status);
       const changed = view.lanes.flatMap((lane, i) => laneStates[i] === previousLaneStates[i] ? [] :
-        [`["Human", "Algorithm"][i]: ${STATUS[lane.status]}. ${['won','capped','over','error'].includes(lane.status) ? outcomeDetail(lane.status,lane.observation,lane.error) : ''}`]);
+        [`${["Human", "Algorithm"][i]}: ${STATUS[lane.status]}. ${['won','capped','over','error'].includes(lane.status) ? outcomeDetail(lane.status,lane.observation,lane.error) : ''}`]);
       text('v-announcement', `${progress}. ${changed.join(' ')}`);
       previousLaneStates = laneStates; previousAnnouncement = announcement;
     }

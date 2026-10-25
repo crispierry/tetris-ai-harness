@@ -112,3 +112,32 @@ test('a final single-line clear completes before a next piece that would have bl
   assert.equal(won.nextType,'T');assert.equal(won.queue,s.queue);assert.equal(won.rng,s.rng);
   const before=nearFinish(289,1),after=hardDrop(before);assert.equal(after.lines,290);assert.equal(after.level,30);assert.equal(after.score,1234+100*29);assert.equal(after.status,'playing');
 });
+
+test('coupled full versus records both progressing heuristic lanes through Marathon completion', async () => {
+  // Accelerate only visual algorithm pacing. The real 1500ms decision guard is untouched.
+  const nativeTimeout=globalThis.setTimeout;
+  const yieldTurn=()=>new Promise(resolve=>nativeTimeout(resolve,0));
+  globalThis.setTimeout=(fn,ms,...args)=>nativeTimeout(fn,ms===500?0:ms,...args);
+  const c=new HumanVersus();const local=heuristic();let state=start(createGame()),revision=0;
+  try {
+    c.start();
+    for(let n=0;n<1000 && state.status==='playing';n++){
+      const b={sessionId:'coupled-manual',revision:revision++},raw=enumerate(state,b);
+      const p=instructionPacket(observe(state,b),raw.map(x=>candidateEvidence(state,x,b)),{requestId:`coupled-${n}`,deadlineMs:5000});
+      const selected=await local.decide(p),candidate=raw.find(x=>x.id===selected.selectedCandidateId);
+      for(const action of candidate.path)c.input(({clockwise:'rotate'})[action]??action);
+      state=execute(state,candidate,b);await yieldTurn();
+      assert.equal(c.view.archiveError,null,`both lanes must fit recording admission at ${n+1} human placements`);
+      assert.equal(c.view.lanes[0].pieces,n+1);
+    }
+    for(let n=0;n<1000 && !c.view.lanes[1].outcome;n++)await yieldTurn();
+    assert.equal(state.status,'won');assert(c.view.lanes[1].pieces>700,'the algorithm must actually progress with the human');
+    assert(c.view.lanes.every(l=>l.status==='won'&&l.observation.lines>=300&&l.observation.active===null));
+    assert.equal(c.view.state,'completed');assert.equal(c.view.archiveError,null);
+    const json=c.exportRun(),record=JSON.parse(json);
+    assert(record.outcomes.every(o=>o.status==='won'&&!o.censored));assert.equal(record.archiveIncomplete,false);
+    assert(record.frames.some(f=>f.lane===0&&f.event==='outcome'&&f.status==='won'));
+    assert(record.frames.some(f=>f.lane===1&&f.event==='outcome'&&f.status==='won'));
+    assert(record.frames.length<=record.limits.frames);assert(Buffer.byteLength(json)<=record.limits.exportBytes);
+  } finally {c.dispose();globalThis.setTimeout=nativeTimeout;}
+});

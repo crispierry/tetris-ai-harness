@@ -62,7 +62,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     if (announcement !== previousAnnouncement) {
       const laneStates = view.lanes.map(l => ['running','playing','choosing'].includes(l.status) ? 'active' : l.status);
       const changed = view.lanes.flatMap((lane, i) => laneStates[i] === previousLaneStates[i] ? [] :
-        [`["Left", "Right"][i]: ${STATUS[lane.status]}. ${['won','capped','over','error'].includes(lane.status) ? outcomeDetail(lane.status,lane.observation,lane.error) : ''}`]);
+        [`${["Left", "Right"][i]}: ${STATUS[lane.status]}. ${['won','capped','over','error'].includes(lane.status) ? outcomeDetail(lane.status,lane.observation,lane.error) : ''}`]);
       text('c-announcement', `${progress}. ${changed.join(' ')}`);
       previousLaneStates = laneStates; previousAnnouncement = announcement;
     }

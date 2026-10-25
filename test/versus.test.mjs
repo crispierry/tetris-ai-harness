@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { HumanVersus, VERSUS_LIMITS } from '../public/versus.mjs';
+import { HumanVersus, VERSUS_LIMITS, VERSUS_RECORDING_PROFILE, versusRecordingAdmission } from '../public/versus.mjs';
 import { heuristic, mockProvider } from '../public/controller.mjs';
 import { createGame, start, move, rotate, softDrop, hardDrop, tick, DEFAULT_SEED } from '../public/engine.mjs';
 const pause = ms => new Promise(r => setTimeout(r, ms));
@@ -95,9 +95,10 @@ test('saved replay has no new AI decisions/human writes and exports immutable re
 
 test('recording capacity stops honestly within frame/export bounds and cancels pending work', async () => {
   const control=controlled(),c=new HumanVersus({providerFactory:control.factory});c.start();
-  for(let n=0;n<5000&&!c.view.archiveError;n++)c.input(n%2?'left':'right');
+  for(let n=0;n<VERSUS_LIMITS.frames+1&&!c.view.archiveError;n++)c.input(n%2?'left':'right');
   assert.match(c.view.archiveError,/capacity/);assert.equal(c.view.state,'stopped');assert.equal(c.view.busy,false);
-  const record=JSON.parse(c.exportRun());assert.equal(record.archiveIncomplete,true);assert(record.frames.length<=VERSUS_LIMITS.frames);
+  const record=JSON.parse(c.exportRun());assert.equal(record.archiveIncomplete,true);assert.equal(record.archiveCensored,true);assert(record.frames.length<=VERSUS_LIMITS.frames);
+  assert(record.frames.length>=VERSUS_LIMITS.frames-VERSUS_LIMITS.terminalReserveFrames-1,'negative test must exhaust the actual finite frame profile');
   assert(new TextEncoder().encode(c.exportRun()).length<=VERSUS_LIMITS.exportBytes);c.reset();assert.equal(c.view.archiveError,null);assert.equal(c.view.frameCount,0);c.dispose();
 });
 
@@ -107,4 +108,15 @@ test('all four modes retain direct navigation and current page indication', asyn
     const nav=html.match(/<nav class="mode-nav"[^>]*>(.*?)<\/nav>/s)?.[1];assert(nav,file);
     for(const[,url]of pages)assert(nav.includes(`href="${url}"`),`${file}: ${url}`);
     assert(nav.includes(`href="${current}" aria-current="page"`));assert.equal((nav.match(/aria-current/g)??[]).length,1);assert(html.includes('/modes.css'));}
+});
+
+test('versus normal-play recording admission covers both 1000-placement lanes, gravity/input allowance and metadata within strict limits',()=>{
+  const p=VERSUS_RECORDING_PROFILE,a=versusRecordingAdmission();
+  for(const cap of [0,1001,1.5])assert.throws(()=>versusRecordingAdmission(cap),/Bounded/);
+  assert.equal(p.humanFramesPerPlacement,40);assert.equal(a.plannedHumanFrames,40000);assert.equal(a.plannedAlgorithmFrames,1000);
+  assert.equal(a.plannedFrames,49000);assert(a.plannedFrames+VERSUS_LIMITS.terminalReserveFrames<=VERSUS_LIMITS.frames);
+  assert(a.plannedBytes<=VERSUS_LIMITS.exportBytes);assert.equal(VERSUS_LIMITS.metadataReserveBytes,160*1024);
+  const c=new HumanVersus(),record=JSON.parse(c.exportRun());
+  assert.deepEqual(record.admission.recording,a);assert.equal(record.limits.recordingProfile.version,p.version);
+  assert.equal(record.limits.frames,50000);assert.equal(record.limits.exportBytes,64*1024*1024);assert.equal(record.archiveCensored,false);c.dispose();
 });

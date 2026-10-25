@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mountComparison } from '../public/comparison-ui.mjs';
-import { DEFAULT_CONFIG } from '../public/comparison.mjs';
+import { Comparison, DEFAULT_CONFIG } from '../public/comparison.mjs';
 class Element {
   constructor(){this.children=[];this.attributes={};this.listeners={};this.value='';this.textContent='';this.disabled=false;this.hidden=false;}
   append(...nodes){this.children.push(...nodes);} replaceChildren(...nodes){this.children=[...nodes];}
@@ -38,4 +38,20 @@ test('automatic waiting can be paused and reset, visibility hides cancel work, n
   await $('c-start').trigger('click');await until(()=>$('c-0-status').textContent==='Choosing…');doc.hidden=true;listeners.visibilitychange();
   assert.equal(c.view.auto,false);await $('c-reset').trigger('click');await pause(300);assert.equal($('c-0-pieces').textContent,'0');
   assert.equal(listeners.keydown,undefined);assert.equal($('c-pause').disabled,true);c.dispose();
+});
+
+test('mounted comparison terminal announcements interpolate each lane identity and announce a frozen winner once',()=>{
+  const {$,doc}=fixture();let emit;
+  const c=mountComparison(doc,{comparisonFactory:options=>{emit=options.onChange;return new Comparison(options);}});
+  const terminal=(view,index,status)=>{
+    const lane=view.lanes[index];lane.status=status;lane.error=status==='error'?'Distinct right failure':null;
+    lane.outcome={status,censored:status==='capped'||status==='error',reason:status==='won'?'300-line target reached':status==='over'?'blocked spawn':'piece cap'};
+    lane.observation={...lane.observation,active:null,status,lines:status==='won'?300:10,level:status==='won'?30:2};
+  };
+  const view=structuredClone(c.view);view.state='completed';view.locked=true;
+  terminal(view,0,'won');terminal(view,1,'capped');emit(view);
+  assert.match($('c-announcement').textContent,/Left: Marathon complete/);assert.match($('c-announcement').textContent,/Right: Capped/);
+  assert(!/\[.*\]\[i\]/.test($('c-announcement').textContent));
+  terminal(view,1,'error');emit(view);assert.match($('c-announcement').textContent,/Right: Error/);assert.doesNotMatch($('c-announcement').textContent,/Left: Marathon complete/);
+  terminal(view,0,'over');emit(view);assert.match($('c-announcement').textContent,/Left: Game over/);c.dispose();
 });
