@@ -3,6 +3,11 @@ import path from 'node:path';
 import { lstat, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { assetPath, launchIdentity, mimeTypes } from './scaffold.mjs';
+import { createDecisionService } from './decision-service.mjs';
+import { createDecisionHandler } from './decision-http.mjs';
+// Owner bootstrap is intentionally absent: ordinary launch cannot enroll or spend.
+const decisions = createDecisionService();
+const decisionHandler = createDecisionHandler({ service: decisions, host: `127.0.0.1:${Number(process.env.BOB_LOCAL_PORT)}`, origin: `http://127.0.0.1:${Number(process.env.BOB_LOCAL_PORT)}` });
 const identity = launchIdentity(process.env, process.pid);
 const root = fileURLToPath(new URL('./public/', import.meta.url));
 async function asset(relative) {
@@ -20,7 +25,8 @@ async function asset(relative) {
 http.createServer(async (request, response) => {
   response.setHeader('cache-control', 'no-store');
   response.setHeader('x-content-type-options', 'nosniff');
-  response.setHeader('content-security-policy', "default-src 'self'; object-src 'none'; base-uri 'none'");
+  response.setHeader('content-security-policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  if (await decisionHandler(request, response)) return;
   if (!['GET','HEAD'].includes(request.method)) { response.writeHead(405); response.end(); return; }
   if (request.url === '/identity') {
     response.setHeader('content-type', 'application/json');
