@@ -87,7 +87,7 @@ export function createDecisionService({ enabled = false, store, policy, qualific
         timer = setTimeout(() => job.abort.abort(), Math.min(policy.timeoutMs, packet?.deadlineMs ?? policy.timeoutMs, run.expiresAt - Date.now()));
         const p = canonicalPacket(packet), session = `${run.controllerSessionBase}-${run.epoch}`;
         if (p.observation.sessionId !== session) fail('epoch');
-        const current = () => { if (job.abort.signal.aborted || Date.now() >= deadline || Date.now() >= policy.expiresAt || (mode === 'live' && !qualifiedDecisions(qualification, policy)) || closing || store.snapshot().runs[run.id]?.epoch !== job.epoch || (store.snapshot().runs[run.id]?.closed || (!completed && store.snapshot().runs[run.id]?.terminal))) fail('cancelled'); };
+        const current = () => { if (!available || job.abort.signal.aborted || Date.now() >= deadline || Date.now() >= policy.expiresAt || (mode === 'live' && !qualifiedDecisions(qualification, policy)) || closing || store.snapshot().runs[run.id]?.epoch !== job.epoch || (store.snapshot().runs[run.id]?.closed || (!completed && store.snapshot().runs[run.id]?.terminal))) fail('cancelled'); };
         current();
         key = `${run.id}:${run.epoch}:${p.requestId}`;
         const request = requestFor('decisions', p, config);

@@ -124,3 +124,38 @@ test('observed input above the asserted ceiling holds further dispatch and retai
     await assert.rejects(service.decide(grant.capability,packet('counterexample')),{code:'unavailable'});assert.equal(calls,1);
   } finally {globalThis.fetch=oldFetch;await service.close();}
 });
+
+
+for (const peerStage of ['reserved', 'sent']) test(`shared disqualification fences an already-${peerStage} peer without refund or placement`,async t=>{
+  const d=await directory(t), c=configuration(), raw=await openDecisionStore({directory:path.join(d,'ledger'),lineage:'shared-hold-'+peerStage,policy:c.policy,enroll:true});
+  const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+  const aEntered=deferred(), bEntered=deferred(), aReply=deferred(), bReply=deferred();
+  let bId, held=false, calls=0;
+  // Widen the real durable reserve-return boundary without replacing any
+  // ledger write or service predicate. No scheduling timing assumption is used.
+  const store={get sound(){return raw.sound;},get fixtureOnly(){return raw.fixtureOnly;},snapshot:raw.snapshot,inspect:raw.inspect,close:raw.close,
+    async transact(change){const result=await raw.transact(change);
+      if(peerStage==='reserved'&&!held&&Object.values(raw.snapshot().requests).some(r=>r.runId===bId&&r.status==='reserved')){held=true;bEntered.resolve();await bReply.promise;}
+      return result;
+    }};
+  const service=createDecisionService({enabled:true,store,...c,credential:dummy}), oldFetch=globalThis.fetch;
+  let pa,pb;
+  globalThis.fetch=async(url,options)=>{
+    calls++;const body=answer(JSON.parse(options.body));
+    if(calls===1){aEntered.resolve();await aReply.promise;body.usage.input_tokens=1050001;}
+    else {bEntered.resolve();await bReply.promise;}
+    return new Response(JSON.stringify(body),{status:200});
+  };
+  try {
+    const a=await service.owner.issueRun({laneId:'a',controllerSessionBase:'a'}), b=await service.owner.issueRun({laneId:'b',controllerSessionBase:'b'});bId=b.runId;
+    pa=service.decide(a.capability,packet('a')).catch(error=>error.code);await aEntered.promise;
+    pb=service.decide(b.capability,packet('b')).catch(error=>error.code);await bEntered.promise;
+    aReply.resolve();assert.equal(await pa,'qualification_required');assert.equal(service.status().available,false);
+    assert.equal(calls,peerStage==='reserved'?1:2);
+    bReply.resolve();assert.equal(await pb,'cancelled');assert.equal(calls,peerStage==='reserved'?1:2);
+    const snapshot=raw.snapshot(), peer=Object.values(snapshot.requests).find(r=>r.runId===bId);
+    assert.equal(peer.status,peerStage==='reserved'?'rejected':'uncertain');assert.equal(snapshot.runs[bId].placements,0);
+    assert.deepEqual(snapshot.used,{attempts:2,inputTokens:2100000,estimatedMicros:1039500});
+    await assert.rejects(service.decide(b.capability,packet('b')),{code:'unavailable'});assert.equal(calls,peerStage==='reserved'?1:2);
+  } finally {aReply.resolve();bReply.resolve();await Promise.allSettled([pa,pb]);await service.close();globalThis.fetch=oldFetch;}
+});
