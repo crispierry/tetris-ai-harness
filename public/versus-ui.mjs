@@ -34,8 +34,9 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     $('v-step').disabled = view.running || view.busy || view.playback || archiveBlocked || (!replay && !!view.lanes[1].outcome) || unavailable;
     text('v-step', replay ? 'Next saved frame' : 'Step algorithm');
     $('v-replay').disabled = !view.frameCount; $('v-export').disabled = !view.frameCount;
+    const algorithm=view.lanes[1],algorithmPresentation=algorithm.error||algorithm.recoveryRequired?null:algorithm.presentation,algorithmPieces=algorithmPresentation?.before.pieces??algorithm.pieces;
     const progress = replay ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new choices`
-      : `${STATUS[view.state]} · Human ${view.lanes[0].pieces}/${view.limits.pieces} pieces · Algorithm ${view.lanes[1].pieces}/${view.limits.pieces} pieces`;
+      : `${STATUS[view.state]} · Human ${view.lanes[0].pieces}/${view.limits.pieces} pieces · Algorithm ${algorithmPieces}/${view.limits.pieces} pieces`;
     text('v-progress', progress + (view.limits.pieces < 1000 ? ' · Abbreviated run' : '')); text('v-recording', `${view.frameCount} saved frames${view.archiveError ? ' · Incomplete recording' : ''}. Reset clears this run.`);
     view.lanes.forEach((canonical, i) => {
       if(view.mode!=='replay')pairing?.observe(canonical.lastDecision?.receipt);
