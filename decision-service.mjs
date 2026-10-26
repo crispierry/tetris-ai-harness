@@ -1,3 +1,4 @@
+import { qualifiedDecisions } from './decision-qualification.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { digest } from './decision-store.mjs';
 import { packetCheck, requestFor, parse } from './choice-protocol.mjs';
@@ -22,7 +23,7 @@ export function canonicalPacket(packet) {
 }
 function checkPolicy(p) {
   if (!p || Object.keys(p).some(k => !['maxAttempts','maxInputTokens','maxEstimatedMicros','expiresAt','maxRuns','maxEpochs','maxPlacements','timeoutMs','reservationTokens','reservationMicros'].includes(k)) ||
-      Object.values(p).some(v => !Number.isSafeInteger(v) || v < 1) || p.maxEstimatedMicros > 10000000 || p.maxAttempts > 10000 || p.maxRuns > 64 || p.maxEpochs > 100 || p.maxPlacements > 1000 || p.timeoutMs > 60000 || p.reservationTokens < 1049600 || p.reservationMicros > p.maxEstimatedMicros || p.expiresAt <= Date.now()) fail('configuration');
+      Object.values(p).some(v => !Number.isSafeInteger(v) || v < 1) || p.maxEstimatedMicros > 10000000 || p.maxAttempts > 10000 || p.maxRuns > 64 || p.maxEpochs > 100 || p.maxPlacements > 1000 || p.timeoutMs > 60000 || p.reservationTokens < 1 || p.reservationMicros > p.maxEstimatedMicros || p.expiresAt <= Date.now()) fail('configuration');
   for (const k of ['maxAttempts','maxInputTokens','maxEstimatedMicros','expiresAt','maxRuns','maxEpochs','maxPlacements','timeoutMs','reservationTokens','reservationMicros']) if (!Number.isSafeInteger(p[k])) fail('configuration');
 }
 export function createDecisionService({ enabled = false, store, policy, qualification, transport, credential, hosted = false } = {}) {
@@ -30,19 +31,16 @@ export function createDecisionService({ enabled = false, store, policy, qualific
   if (enabled) {
     policy = freeze(structuredClone(policy)); checkPolicy(policy);
     const fixture = transport?.mode === 'fixture';
+    if (fixture && policy.reservationTokens < 1049600) fail('configuration');
     // A fixture never attests live qualification. Live must be explicitly qualified by the owner.
-    const q = qualification;
-    const qualified = q?.kind === 'owner-qualified-live-v1' && q.model === config.model && q.endpoint === 'https://api.openai.com/v1/decisions' &&
-      ['maxInputTokens','maxOutputTokens','framingTokenBound','inputMicrosPerMillion','outputMicrosPerMillion','maxCostMicros'].every(k => Number.isSafeInteger(q[k]) && q[k] > 0) &&
-      q.maxInputTokens === policy.reservationTokens && q.framingTokenBound >= 1024 && q.maxInputTokens >= 1048576 + q.framingTokenBound && q.maxOutputTokens >= 4096 &&
-      q.maxCostMicros >= Math.ceil((q.maxInputTokens * q.inputMicrosPerMillion + q.maxOutputTokens * q.outputMicrosPerMillion) / 1000000) &&
-      q.maxCostMicros <= policy.reservationMicros && q.maxBodyBytes === 1048576 && typeof q.evidence === 'string' && q.evidence.length > 0;
+    qualification = qualification ? freeze(structuredClone(qualification)) : qualification;
+    const qualified = qualifiedDecisions(qualification, policy);
     if (!hosted && store && (fixture || (!store.fixtureOnly && !transport && qualified && typeof credential === 'string' && credential.length > 0))) { available = true; reason = fixture ? 'fixture-only' : 'owner-qualified-live'; }
     else reason = hosted ? 'host_unqualified' : 'qualification_required';
   }
   const mode = reason === 'fixture-only' ? 'http-fixture' : 'live';
   const pending = new Map(), operations = new Set(), upstreamOperations = new Set();
-  const status = () => Object.freeze({ available: available && (!store || store.sound) && !closing && Date.now() < policy?.expiresAt, reason: closing ? 'shutdown' : store && !store.sound ? 'store_unavailable' : available && Date.now() >= policy.expiresAt ? 'expired' : reason });
+  const status = () => Object.freeze({ available: available && (!store || store.sound) && !closing && Date.now() < policy?.expiresAt && (mode === 'http-fixture' || qualifiedDecisions(qualification, policy)), reason: closing ? 'shutdown' : store && !store.sound ? 'store_unavailable' : available && Date.now() >= policy.expiresAt ? 'expired' : available && mode === 'live' && !qualifiedDecisions(qualification, policy) ? 'qualification_required' : reason });
   function ready() { if (!status().available) fail('unavailable'); }
   function authenticate(capability, snapshot, allowTerminal = false, allowClosed = false) {
     ready(); if (typeof capability !== 'string' || !/^[a-f0-9]{64}$/.test(capability)) fail('unauthorized');
@@ -89,7 +87,7 @@ export function createDecisionService({ enabled = false, store, policy, qualific
         timer = setTimeout(() => job.abort.abort(), Math.min(policy.timeoutMs, packet?.deadlineMs ?? policy.timeoutMs, run.expiresAt - Date.now()));
         const p = canonicalPacket(packet), session = `${run.controllerSessionBase}-${run.epoch}`;
         if (p.observation.sessionId !== session) fail('epoch');
-        const current = () => { if (job.abort.signal.aborted || Date.now() >= deadline || Date.now() >= policy.expiresAt || closing || store.snapshot().runs[run.id]?.epoch !== job.epoch || (store.snapshot().runs[run.id]?.closed || (!completed && store.snapshot().runs[run.id]?.terminal))) fail('cancelled'); };
+        const current = () => { if (job.abort.signal.aborted || Date.now() >= deadline || Date.now() >= policy.expiresAt || (mode === 'live' && !qualifiedDecisions(qualification, policy)) || closing || store.snapshot().runs[run.id]?.epoch !== job.epoch || (store.snapshot().runs[run.id]?.closed || (!completed && store.snapshot().runs[run.id]?.terminal))) fail('cancelled'); };
         current();
         key = `${run.id}:${run.epoch}:${p.requestId}`;
         const request = requestFor('decisions', p, config);
@@ -127,6 +125,13 @@ export function createDecisionService({ enabled = false, store, policy, qualific
           const rawUsage = result.body?.usage, usage = {};
           for (const key of ['input_tokens','output_tokens','total_tokens']) if (Number.isSafeInteger(rawUsage?.[key]) && rawUsage[key] >= 0) usage[key] = rawUsage[key];
           for (const key of ['cached_input_tokens','cache_read_input_tokens','cache_write_input_tokens']) if (Number.isSafeInteger(rawUsage?.[key]) && rawUsage[key] >= 0 && rawUsage[key] <= usage.input_tokens) usage[key] = rawUsage[key];
+          const details = rawUsage?.input_tokens_details, nested = {};
+          for (const key of ['cached_tokens','cache_write_tokens']) if (Number.isSafeInteger(details?.[key]) && details[key] >= 0 && details[key] <= usage.input_tokens) nested[key] = details[key];
+          if (Object.keys(nested).length) usage.input_tokens_details = nested;
+          // Cache read/write counts are subsets, never added to input_tokens.
+          if (mode === 'live' && usage.input_tokens > qualification.totalBillableInputCeiling) {
+            available = false; reason = 'qualification_required'; fail('qualification_required');
+          }
           responseUsage = Object.keys(usage).length ? usage : null;
         }
         current(); const selected = p.candidates.find(c => c.id === decoded.choice.selectedCandidateId);
