@@ -44,14 +44,20 @@ export function createDecisionService({ enabled = false, store, policy, qualific
   const pending = new Map(), operations = new Set(), upstreamOperations = new Set();
   const status = () => Object.freeze({ available: available && (!store || store.sound) && !closing && Date.now() < policy?.expiresAt, reason: closing ? 'shutdown' : store && !store.sound ? 'store_unavailable' : available && Date.now() >= policy.expiresAt ? 'expired' : reason });
   function ready() { if (!status().available) fail('unavailable'); }
-  function authenticate(capability, snapshot, allowTerminal = false) {
+  function authenticate(capability, snapshot, allowTerminal = false, allowClosed = false) {
     ready(); if (typeof capability !== 'string' || !/^[a-f0-9]{64}$/.test(capability)) fail('unauthorized');
     const run = Object.values(snapshot.runs).find(r => r.capabilityDigest === digest(capability));
-    if (!run || run.closed || (!allowTerminal && (run.terminal || run.interrupted)) || run.expiresAt <= Date.now()) fail('unauthorized'); return run;
+    if (!run || (!allowClosed && run.closed) || (!allowTerminal && (run.terminal || run.interrupted)) || run.expiresAt <= Date.now()) fail('unauthorized'); return run;
   }
   async function control(capability, action, epoch) {
-    const run = authenticate(capability, store.snapshot(), true);
+    const run = authenticate(capability, store.snapshot(), true, action==='close');
     // Authenticated read waits for already-admitted writes and never cancels lane work.
+    if (action === 'runStatus') {
+      if (epoch !== undefined) fail('input');
+      const snapshot = await store.inspect(), current = authenticate(capability,snapshot,true);
+      const requests = Object.values(snapshot.requests).filter(r=>r.runId===current.id);
+      return freeze({mode,provider:'OpenAI',requestedModel:config.model,observedModel:requests.findLast(r=>r.status==='completed' && r.upstream && typeof r.observedModel==='string')?.observedModel??null,endpoint:'https://api.openai.com/v1/decisions',protocol:'decisions-http-1',policyDigest:snapshot.policyDigest,limits:policy,epoch:current.epoch,placements:current.placements,expiresAt:current.expiresAt,interrupted:current.interrupted,terminal:current.terminal,remainingAttempts:Math.max(0,policy.maxAttempts-snapshot.used.attempts),remainingReservedInputTokens:Math.max(0,policy.maxInputTokens-snapshot.used.inputTokens),remainingEstimatedMicros:Math.max(0,policy.maxEstimatedMicros-snapshot.used.estimatedMicros),attempts:requests.filter(r=>r.upstream).length,completions:requests.filter(r=>r.status==='completed').length,uncertain:requests.filter(r=>r.status==='uncertain'||r.status==='dispatch-intent').length,actualExternalCalls:mode==='http-fixture'?0:null,actualCostUSD:mode==='http-fixture'?0:null});
+    }
     if (action === 'currentEpoch') {
       if (epoch !== undefined) fail('input');
       const current = authenticate(capability, await store.inspect(), true);
@@ -61,7 +67,7 @@ export function createDecisionService({ enabled = false, store, policy, qualific
     if (action === 'advanceEpoch' && (epoch !== run.epoch + 1 || epoch >= policy.maxEpochs)) fail('epoch');
     const old = pending.get(run.laneId); old?.abort.abort();
     const result = await store.transact(s => {
-      const r = authenticate(capability, s, true);
+      const r = authenticate(capability, s, true, action==='close');
       if (action === 'close') r.closed = true;
       else { if (epoch !== r.epoch + 1 || epoch >= policy.maxEpochs) fail('epoch'); r.epoch = epoch; r.expected = null; r.placements = 0; r.terminal = false; r.interrupted = false; }
       return { epoch: r.epoch, closed: r.closed };
@@ -74,6 +80,7 @@ export function createDecisionService({ enabled = false, store, policy, qualific
     if (pending.has(run.laneId)) fail('overlap');
     const job = { abort: new AbortController(), epoch: run.epoch }; pending.set(run.laneId, job);
     let timer, listener, key, reserved = false, sent = false, completed = false;
+    const startedAt = performance.now();
     const deadline = Date.now() + Math.min(policy.timeoutMs, packet?.deadlineMs ?? policy.timeoutMs, run.expiresAt - Date.now());
     const work = (async () => {
       try {
@@ -102,7 +109,7 @@ export function createDecisionService({ enabled = false, store, policy, qualific
           if (upstream) { s.used.attempts++; s.used.inputTokens += policy.reservationTokens; s.used.estimatedMicros += policy.reservationMicros; }
           s.requests[key] = { digest: digest(p), status: 'reserved', upstream, deadline: Date.now() + Math.min(p.deadlineMs, policy.timeoutMs), runId: run.id, epoch: run.epoch };
         });
-        reserved = true; current(); let decoded, responseUsage = null;
+        reserved = true; current(); let decoded, responseUsage = null, observedModel=null;
         if (!upstream) decoded = { choice: { requestId: p.requestId, stateRevision: p.stateRevision, selectedCandidateId: p.candidates[0].id } };
         else {
           await store.transact(s => { current(); s.requests[key].status = 'dispatch-intent'; }); current(); sent = true;
@@ -116,16 +123,16 @@ export function createDecisionService({ enabled = false, store, policy, qualific
           const dispatched = Promise.resolve().then(fetchResult); upstreamOperations.add(dispatched);
           dispatched.then(() => upstreamOperations.delete(dispatched), () => upstreamOperations.delete(dispatched));
           let result; try { result = await Promise.race([dispatched, cancel]); } catch (e) { if (e.code === 'cancelled') throw e; fail('transport_ambiguous'); }
-          current(); decoded = parse('decisions', result, p);
+          current(); decoded = parse('decisions', result, p);observedModel=result.body.model;
           const rawUsage = result.body?.usage, usage = {};
           for (const key of ['input_tokens','output_tokens','total_tokens']) if (Number.isSafeInteger(rawUsage?.[key]) && rawUsage[key] >= 0) usage[key] = rawUsage[key];
           for (const key of ['cached_input_tokens','cache_read_input_tokens','cache_write_input_tokens']) if (Number.isSafeInteger(rawUsage?.[key]) && rawUsage[key] >= 0 && rawUsage[key] <= usage.input_tokens) usage[key] = rawUsage[key];
           responseUsage = Object.keys(usage).length ? usage : null;
         }
         current(); const selected = p.candidates.find(c => c.id === decoded.choice.selectedCandidateId);
-        await store.transact(s => { current(); const r = s.runs[run.id]; r.expected = selected.afterstate; r.placements++; r.terminal = selected.afterstate.status !== 'playing'; s.requests[key].status = 'completed'; });
+        await store.transact(s => { current(); const r = s.runs[run.id]; r.expected = selected.afterstate; r.placements++; r.terminal = selected.afterstate.status !== 'playing'; s.requests[key].status = 'completed';s.requests[key].observedModel=observedModel; });
         completed = true; current();
-        return freeze({ choice: decoded.choice, receipt: { mode, runId:run.id, laneId:run.laneId, epoch:run.epoch, lineage:store.snapshot().lineage, policyDigest:store.snapshot().policyDigest, usage:responseUsage, estimatedReservationMicros:upstream ? policy.reservationMicros : 0, reservedInputTokens:upstream ? policy.reservationTokens : 0, requestId: p.requestId, stateRevision: p.stateRevision, selectedCandidateId: decoded.choice.selectedCandidateId, attempts: upstream ? 1 : 0, actualCostUSD: null, usageProvenance: transport ? 'fixture response; no API usage' : 'provider response; billing unverified' } });
+        return freeze({ choice: decoded.choice, receipt: { version:'decision-receipt-2', provider:'OpenAI', requestedModel:config.model, observedModel, requestLatencyMs:performance.now()-startedAt, completions:1, placements:1, actualExternalCalls:mode==='http-fixture'?0:null, remainingAllowance:{attempts:Math.max(0,policy.maxAttempts-store.snapshot().used.attempts),reservedInputTokens:Math.max(0,policy.maxInputTokens-store.snapshot().used.inputTokens),estimatedReservationMicros:Math.max(0,policy.maxEstimatedMicros-store.snapshot().used.estimatedMicros)}, completedResponses:upstream?1:0, mode, runId:run.id, laneId:run.laneId, epoch:run.epoch, lineage:store.snapshot().lineage, policyDigest:store.snapshot().policyDigest, usage:responseUsage, estimatedReservationMicros:upstream ? policy.reservationMicros : 0, reservedInputTokens:upstream ? policy.reservationTokens : 0, requestId: p.requestId, stateRevision: p.stateRevision, selectedCandidateId: decoded.choice.selectedCandidateId, attempts: upstream ? 1 : 0, actualCostUSD: mode==='http-fixture'?0:null, usageProvenance: transport ? 'fixture response; no API usage' : 'provider response; billing unverified' } });
       } catch (error) {
         if (reserved && key && !completed && store.snapshot().requests[key]) await store.transact(s => { s.requests[key].status = sent ? 'uncertain' : 'rejected'; if (sent && s.runs[run.id].epoch === job.epoch) s.runs[run.id].interrupted = true; }).catch(() => { available = false; reason = 'store_unavailable'; });
         if (error.code === 'store_unavailable') { available = false; reason = 'store_unavailable'; }

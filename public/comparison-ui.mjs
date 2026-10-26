@@ -1,5 +1,7 @@
-import { MARATHON_COPY, linesProgress, outcomeDetail, formatNumber } from './marathon.mjs';
-import { Comparison, DEFAULT_CONFIG } from './comparison.mjs';
+import { mountDecisionPairing } from './decision-session.mjs';
+import { providerFor } from './comparison.mjs';
+import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail, formatNumber } from './marathon.mjs';
+import { Comparison, DEFAULT_CONFIG, validateConfig } from './comparison.mjs';
 import { GEOMETRY } from './harness.mjs';
 import { briefing } from './briefing.mjs';
 
@@ -19,7 +21,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   }));
   let previousAnnouncement = '', previousLaneStates = [];
   function render(view) {
-    SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked; });
+    SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (view.config.right==='openai' && ['nodeCap','timeMs'].includes(key)); });
     const ended = view.mode === 'live' && view.sample >= view.config.samples && view.lanes.every(l => l.outcome);
     $('c-start').disabled = view.auto || view.busy || ended || !!view.archiveError;
     $('c-step').disabled = view.auto || view.busy || ended || !!view.archiveError;
@@ -31,10 +33,11 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       : `${STATUS[view.state]} · Sample ${view.sample} of ${view.config.samples} · ${view.summary.observedPairs} completed pairs`;
     text('c-progress', progress + (view.config.pieceCap < 1000 ? ' · Abbreviated run' : ''));
     view.lanes.forEach((lane, index) => {
+      if(view.mode!=='replay')pairing?.observe(lane.lastDecision?.receipt);
       const prefix = `c-${index}-`, obs = lane.observation;
       text(prefix + 'heading', `${index ? 'Right' : 'Left'} · ${lane.player.name}`);
-      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${lane.player.kind === 'mock' ? 'Offline test fixture' : 'Local algorithm'} · ${lane.assistance}`);
-      for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
+      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${lane.player.kind==='remote'?(lane.policy.transport==='http-fixture'?'Offline fixture connected — No external calls':'Live OpenAI connected'):lane.player.kind === 'mock' ? 'Offline test fixture' : 'Local algorithm'} · ${lane.assistance}`);
+      for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
         const falling = active.get(`${x},${y}`), type = falling ?? obs.board[y][x];
@@ -51,8 +54,8 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       });
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
       text(prefix + 'outcome', outcomeDetail(lane.recordedStatus ?? lane.status, obs, lane.error));
-      text(prefix + 'choice', lane.lastDecision ? `${lane.lastDecision.candidate.piece} · ${Math.round(lane.lastDecision.latencyMs)} ms local decision overhead${view.mode === 'replay' ? ' (recorded)' : ''}` : 'No piece selected yet.');
-      text(prefix + 'details', JSON.stringify({ placement: lane.lastDecision?.candidate ?? null, search: lane.search, policy: lane.policy,
+      text(prefix + 'choice', lane.lastDecision ? `${lane.lastDecision.candidate.piece} · ${Math.round(lane.lastDecision.latencyMs)} ms decision attempt latency${view.mode === 'replay' ? ' (recorded)' : ''}` : 'No piece selected yet.');
+      text(prefix + 'details', JSON.stringify({ receipt:lane.lastDecision?.receipt??null,placement: lane.lastDecision?.candidate ?? null, search: lane.search, policy: lane.policy,
         recordedStatus: lane.recordedStatus ?? null, valueMeaning: 'Raw board features; scalar leaf value is not a probability.' }, null, 2));
     });
     const s = view.summary;
@@ -68,18 +71,22 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     }
     if (view.archiveError) { $('c-error').hidden = false; text('c-error', view.archiveError); }
   }
-  const comparison = comparisonFactory({ onChange: render });
+  let pairing;
+  const comparison = comparisonFactory({ onChange: render,providerFactory:(key,config)=>key==='openai'?pairing.session.provider:providerFor(key,config) });
+  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
   const settings = () => Object.fromEntries(SETTINGS.map(key => [key, ['left', 'right'].includes(key) ? $('c-' + key).value : Number($('c-' + key).value)]));
   const act = fn => async () => {
     try { $('c-error').hidden = true; text('c-error', ''); await fn(); }
     catch (error) { $('c-error').hidden = false; text('c-error', error.message); }
   };
-  SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => comparison.configure(settings()))));
+  SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => {pairing?.setEnabled(settings().right==='openai');for(const field of ['nodeCap','timeMs'])$('c-'+field).disabled=settings().right==='openai';comparison.configure(settings());})));
+  pairing?.setEnabled(false);
   for (const action of ['start', 'step']) $('c-' + action).addEventListener('click', act(async () => {
-    if (!comparison.view.locked) comparison.configure(settings()); await comparison[action]();
+    if (!comparison.view.locked) comparison.configure(settings()); await comparison[action](); await pairing?.refresh();
   }));
   for (const action of ['pause', 'stop', 'reset', 'replay']) $('c-' + action).addEventListener('click', act(() => comparison[action]()));
   $('c-export').addEventListener('click', act(() => { onExport(comparison.exportRun()); text('c-announcement', 'Exported own saved visual frames. Private sequences omitted.'); }));
+  globalThis.addEventListener?.('blur',()=>{if(comparison.view.auto||comparison.view.busy)comparison.pause();});
   doc.addEventListener('visibilitychange', () => { if (doc.hidden && (comparison.view.auto || comparison.view.busy)) comparison.pause(); });
   const rules = briefing(), list = doc.createElement('ol');
   rules.instructions.forEach(instruction => { const li = doc.createElement('li'); li.textContent = instruction; list.append(li); });

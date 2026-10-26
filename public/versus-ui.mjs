@@ -1,4 +1,6 @@
-import { MARATHON_COPY, linesProgress, outcomeDetail, formatNumber } from './marathon.mjs';
+import { mountDecisionPairing } from './decision-session.mjs';
+import { providerFor } from './comparison.mjs';
+import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail, formatNumber } from './marathon.mjs';
 import { HumanVersus } from './versus.mjs';
 import { GEOMETRY } from './harness.mjs';
 const STATUS = { ready: 'Ready', playing: 'Playing', running: 'Running', choosing: 'Choosing…', paused: 'Paused',
@@ -15,21 +17,25 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const tiles = [0, 1].map(i => Array.from({ length: 200 }, () => { const e = doc.createElement('span'); e.className = 'comparison-cell'; e.setAttribute('aria-hidden', 'true'); $(`v-${i}-board`).append(e); return e; }));
   let previousAnnouncement = '', previousLaneStates = [], lastFrame = null, frameHandle = null, disposed = false;
   function render(view) {
+    if($('v-provider'))$('v-provider').disabled=view.frameCount>0;
+    if($('v-1-heading'))text('v-1-heading',view.lanes[1].player.name);
+    const unavailable=$('v-provider')?.value==='openai' && pairing?.session.state.state!=='connected';
     const replay = view.mode === 'replay', finished = view.state === 'completed', archiveBlocked = !replay && !!view.archiveError;
-    $('v-start').disabled = finished || view.running || view.busy || view.playback || archiveBlocked;
+    $('v-start').disabled = finished || view.running || view.busy || view.playback || archiveBlocked || unavailable;
     text('v-start', replay ? 'Play saved frames' : view.state === 'ready' ? 'Start' : 'Resume');
     $('v-pause').disabled = !view.running && !view.busy && !view.playback;
     $('v-stop').disabled = view.state === 'ready' || view.state === 'stopped' || finished;
-    $('v-step').disabled = view.running || view.busy || view.playback || archiveBlocked || (!replay && !!view.lanes[1].outcome);
+    $('v-step').disabled = view.running || view.busy || view.playback || archiveBlocked || (!replay && !!view.lanes[1].outcome) || unavailable;
     text('v-step', replay ? 'Next saved frame' : 'Step algorithm');
     $('v-replay').disabled = !view.frameCount; $('v-export').disabled = !view.frameCount;
     const progress = replay ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new choices`
       : `${STATUS[view.state]} · Human ${view.lanes[0].pieces}/${view.limits.pieces} pieces · Algorithm ${view.lanes[1].pieces}/${view.limits.pieces} pieces`;
     text('v-progress', progress + (view.limits.pieces < 1000 ? ' · Abbreviated run' : '')); text('v-recording', `${view.frameCount} saved frames${view.archiveError ? ' · Incomplete recording' : ''}. Reset clears this run.`);
     view.lanes.forEach((lane, i) => {
+      if(view.mode!=='replay')pairing?.observe(lane.lastDecision?.receipt);
       const prefix = `v-${i}-`, obs = lane.observation;
       text(prefix + 'status', STATUS[lane.status]);
-      for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
+      for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
         const falling = active.get(`${x},${y}`), type = falling ?? obs.board[y][x], tile = tiles[i][y * 10 + x];
@@ -46,10 +52,10 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
       text(prefix + 'outcome', outcomeDetail(lane.recordedStatus ?? lane.status, obs, lane.error));
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
       text(prefix + 'details', JSON.stringify({ policy: view.policies[i], recordedStatus: lane.recordedStatus ?? null,
-        placement: lane.lastDecision?.candidate ?? null, outcome: lane.outcome }, null, 2));
+        receipt:lane.lastDecision?.receipt??null,placement: lane.lastDecision?.candidate ?? null, outcome: lane.outcome }, null, 2));
     });
     const last = view.lanes[1].lastDecision;
-    text('v-choice', last ? `${last.candidate.piece} · ${Math.round(last.latencyMs)} ms local algorithm decision overhead${replay ? ' (recorded)' : ''}` : 'No algorithm piece selected yet.');
+    text('v-choice', last ? `${last.candidate.piece} · ${Math.round(last.latencyMs)} ms decision attempt latency${replay ? ' (recorded)' : ''}` : 'No algorithm piece selected yet.');
     const announcement = `${view.mode}/${view.state}/${view.lanes.map(l => ['running','playing','choosing'].includes(l.status) ? 'active' : l.status).join('/')}`;
     if (announcement !== previousAnnouncement) {
       const laneStates = view.lanes.map(l => ['running','playing','choosing'].includes(l.status) ? 'active' : l.status);
@@ -62,7 +68,12 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     if (!view.running) lastFrame = null;
   }
   const runner = runnerFactory({ onChange: render });
-  const act = fn => async () => { try { $('v-message').hidden = true; text('v-message', ''); await fn(); } catch (error) { $('v-message').hidden = false; text('v-message', error.message); } };
+  const select=$('v-provider');let pairing;
+  const configure=()=>runner.configure(()=>select.value==='openai'?pairing.session.provider:providerFor(select.value,{nodeCap:4000,timeMs:500}));
+  pairing=mountDecisionPairing(doc,{mode:'versus',lane:'algorithm',beforeConnect:()=>{if(select.value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if(select?.value==='openai')configure();}});
+  select?.addEventListener('change',()=>{pairing?.setEnabled(select.value==='openai');try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}});
+  pairing?.setEnabled(false);
+  const act = fn => async () => { try { $('v-message').hidden = true; text('v-message', ''); await fn();await pairing?.refresh(); } catch (error) { $('v-message').hidden = false; text('v-message', error.message); } };
   const pause = () => { lastFrame = null; if (runner.view.running || runner.view.busy || runner.view.playback) runner.pause(); };
   $('v-start').addEventListener('click', act(() => { runner.start(); lastFrame = null; if (runner.view.mode === 'live' && runner.view.running) surface.focus({ preventScroll: true }); }));
   $('v-pause').addEventListener('click', act(() => runner.pause()));

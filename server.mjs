@@ -5,10 +5,20 @@ import { fileURLToPath } from 'node:url';
 import { assetPath, launchIdentity, mimeTypes } from './scaffold.mjs';
 import { createDecisionService } from './decision-service.mjs';
 import { createDecisionHandler } from './decision-http.mjs';
-// Owner bootstrap is intentionally absent: ordinary launch cannot enroll or spend.
-const decisions = createDecisionService();
-const decisionHandler = createDecisionHandler({ service: decisions, host: `127.0.0.1:${Number(process.env.BOB_LOCAL_PORT)}`, origin: `http://127.0.0.1:${Number(process.env.BOB_LOCAL_PORT)}` });
+import { openDecisionStore } from './decision-store.mjs';
+import { createDecisionOwner, attachOwnerInput } from './decision-owner.mjs';
 const identity = launchIdentity(process.env, process.pid);
+// Explicit fixture-only OS-owner bootstrap. Provider key presence is never inspected.
+let decisions=createDecisionService(), owner=null, detachOwner=null;
+if(process.argv.includes('--decision-fixture-owner')) {
+  const directory=process.env.BOB_DECISION_FIXTURE_LEDGER;
+  const policy={maxAttempts:1000,maxInputTokens:1049600000,maxEstimatedMicros:1000000,expiresAt:Number(process.env.BOB_DECISION_FIXTURE_EXPIRES),maxRuns:8,maxEpochs:100,maxPlacements:1000,timeoutMs:1500,reservationTokens:1049600,reservationMicros:1000};
+  const store=await openDecisionStore({directory,lineage:'p8-020-offline-fixture',policy,enroll:process.argv.includes('--enroll-decision-fixture')});
+  const transport=Object.assign(async request=>{const ids=request.body.questions[0].choices.map(c=>c.value);return {status:200,body:{model:'gpt-6-luna',answers:[{name:'placement',type:'choice',choice:ids[0],confidence:1,probabilities:ids.map((value,i)=>({value,probability:i?0:1}))}]}};},{mode:'fixture'});
+  decisions=createDecisionService({enabled:true,store,policy,transport});owner=createDecisionOwner({service:decisions});
+  detachOwner=attachOwnerInput(process.stdin,owner,value=>process.stdout.write(JSON.stringify(value)+'\n'));
+}
+const decisionHandler = createDecisionHandler({ service: decisions, owner, host: `127.0.0.1:${Number(process.env.BOB_LOCAL_PORT)}`, origin: `http://127.0.0.1:${Number(process.env.BOB_LOCAL_PORT)}` });
 const root = fileURLToPath(new URL('./public/', import.meta.url));
 async function asset(relative) {
   let current = root;
@@ -22,7 +32,7 @@ async function asset(relative) {
   }
   return readFile(current);
 }
-http.createServer(async (request, response) => {
+const server=http.createServer(async (request, response) => {
   response.setHeader('cache-control', 'no-store');
   response.setHeader('x-content-type-options', 'nosniff');
   response.setHeader('content-security-policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
@@ -37,3 +47,7 @@ http.createServer(async (request, response) => {
   try { const bytes = await asset(relative); response.setHeader('content-type', mime); response.end(request.method === 'HEAD' ? undefined : bytes); }
   catch { response.writeHead(404); response.end(); }
 }).listen(Number(process.env.BOB_LOCAL_PORT), '127.0.0.1');
+
+let stopping=false;
+async function shutdown(){if(stopping)return;stopping=true;try{await detachOwner?.();await owner?.close();await decisions.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));process.stdin.pause();}catch{process.stderr.write('decision_shutdown_drain_failed\n');process.exitCode=1;}}
+process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);

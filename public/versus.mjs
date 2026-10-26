@@ -1,3 +1,5 @@
+import { providerPolicy, compactReceipt } from './provider-policy.mjs';
+import { decisionRecord } from './decision-record.mjs';
 import { createGame, start, move, rotate, softDrop, hardDrop, tick, togglePause, DEFAULT_SEED, RULES } from './engine.mjs';
 import { Controller, heuristic, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { observe, freeze } from './harness.mjs';
@@ -28,8 +30,8 @@ const size = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const clone = value => JSON.parse(JSON.stringify(value));
 const snapshot = o => ({ board: o.board.map(row => row.map(c => c ?? '.').join('')), active: o.active,
   next: [...o.next], score: o.score, lines: o.lines, level: o.level, status: o.status, terminalReason: o.terminalReason });
-const decision = last => last ? { latencyMs: last.latencyMs, candidate: { piece: last.candidate.piece,
-  orientation: last.candidate.orientation, cells: last.candidate.cells, path: last.candidate.path,
+const decision = (last,compactPath=false) => last ? { receipt:compactReceipt(last.receipt), latencyMs: last.latencyMs, candidate: { piece: last.candidate.piece,
+  orientation: last.candidate.orientation, cells: last.candidate.cells, path:compactPath?last.candidate.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''):last.candidate.path,pathEncoding:compactPath?'LRCDH-1':undefined,
   clearedRows: last.candidate.clearedRows, scoreDelta: last.candidate.scoreDelta, linesDelta: last.candidate.linesDelta,
   features: last.candidate.features, featureDeltas: last.candidate.featureDeltas } } : null;
 const ACTIONS = { left: s => move(s, -1), right: s => move(s, 1), rotate, down: softDrop, drop: hardDrop };
@@ -38,7 +40,7 @@ let instance = 0;
 /** Independent manual engine state and local Controller, sharing only explicit lifecycle controls. */
 export class HumanVersus {
   #id = ++instance; #session = 0; #human; #revision = 0; #pieces = 0; #humanOutcome = null;
-  #ai; #aiOutcome = null; #provider; #factory; #epoch = 0; #timer = null; #state = 'ready';
+  #externalPolicy=null; #ai; #aiOutcome = null; #provider; #factory; #epoch = 0; #timer = null; #state = 'ready';
   #pieceCap; #paceMs; #onChange; #frames = []; #bytes = 0; #recording = false; #archiveError = null;
   #algorithmElapsedMs = 0; #humanGravityMs = 0;
   #mode = 'live'; #replayLanes = []; #replayIndex = -1; #playback = false;
@@ -48,12 +50,13 @@ export class HumanVersus {
   }
   #setup() {
     this.#human = createGame(DEFAULT_SEED); this.#revision = 0; this.#pieces = 0;
-    this.#humanOutcome = null; this.#aiOutcome = null; this.#provider = this.#factory();
-    if (!['local', 'mock'].includes(this.#provider?.kind)) throw new Error('Only local or test-mock algorithms are supported.');
-    const controller = new Controller({ seed: DEFAULT_SEED, sessionId: `versus-${this.#id}-${this.#epoch}`,
+    this.#humanOutcome = null; this.#aiOutcome = null; this.#provider = this.#factory();this.#externalPolicy=this.#provider.kind==='remote'?providerPolicy(this.#provider):null;
+    if (!['local', 'mock', 'remote'].includes(this.#provider?.kind)) throw new Error('Only local or test-mock algorithms are supported.');
+    const controller = new Controller({ seed: DEFAULT_SEED, sessionId: this.#provider.controllerBinding?.sessionId ?? `versus-${this.#id}-${this.#epoch}`,gameEpoch:this.#provider.kind==='remote'?this.#session:0,
       provider: this.#provider, deadlineMs: VERSUS_LIMITS.deadlineMs, onChange: () => { if (this.#ai === controller) this.#emit(); } });
     this.#ai = controller;
   }
+  configure(providerFactory) {if(this.#recording)throw new Error('Settings are locked until Reset.');this.#factory=providerFactory;this.#setup();this.#emit();}
   #humanView() {
     return freeze({ observation: observe(this.#human, { sessionId: `human-${this.#id}-${this.#session}`, revision: this.#revision }),
       status: this.#humanOutcome?.status ?? (this.#state === 'stopped' && this.#human.status !== 'ready' ? 'stopped' : this.#human.status),
@@ -64,7 +67,7 @@ export class HumanVersus {
   #policies() {
     return freeze([{ version: 'manual-focused-clock-1', kind: 'human', rulesVersion: RULES.version,
       timing: 'Real gravity in focused running play; independent of algorithm choosing; elapsed chunks at most250ms', pieceCap: this.#pieceCap },
-    { version: this.#provider.version, kind: this.#provider.kind, rulesVersion: RULES.version,
+    this.#provider.kind==='remote'?this.#externalPolicy:{ version: this.#provider.version, kind: this.#provider.kind, rulesVersion: RULES.version,
       assistance: 'canonical-afterstates-v1', weights: this.#provider.kind === 'local' && this.#provider.version === 'heuristic-2' ? HEURISTIC_WEIGHTS : null,
       paceMs: this.#paceMs, deadlineMs: VERSUS_LIMITS.deadlineMs, pieceCap: this.#pieceCap, live: false }]);
   }
@@ -97,7 +100,7 @@ export class HumanVersus {
     const v = lane === 0 ? this.#humanView() : this.#aiView();
     const frame = freeze(clone({ version: 1, lane, event, status: v.status, observation: snapshot(v.observation),
       pieces: v.pieces, player: v.player, outcome: v.outcome, error: v.error?.slice(0, 500) ?? null,
-      lastDecision: decision(v.lastDecision), policyIndex: lane }));
+      lastDecision: decision(v.lastDecision,this.#provider.kind==='remote'), policyIndex: lane }));
     const bytes = size(frame);
     if (this.#frames.length >= VERSUS_LIMITS.frames || this.#bytes + bytes > VERSUS_LIMITS.exportBytes - VERSUS_LIMITS.metadataReserveBytes) { this.#haltArchive(); return; }
     this.#frames.push(frame); this.#bytes += bytes;
@@ -201,6 +204,7 @@ export class HumanVersus {
     if (this.#nextReplay()) this.#timer = setTimeout(() => this.#playReplay(epoch), this.#paceMs);
   }
   exportRun() {
+    if(this.#provider.kind==='remote')return decisionRecord({mode:'versus',policies:this.#policies(),frames:this.#frames,finals:[this.#humanView(),this.#aiView()].map(v=>({score:v.observation.score,lines:v.observation.lines,pieces:v.pieces})),reasons:[this.#humanOutcome?.reason??this.#humanView().status,this.#aiOutcome?.reason??this.#aiView().status],metadata:{archiveError:this.#archiveError,accounting:this.#provider.runMetadata.admission}});
     const record = { version: VERSUS_VERSION, frameVersion: 1, rulesVersion: RULES.version,
       objective: RULES.objective, admission: { recording: versusRecordingAdmission(this.#pieceCap), plannedPlacements: 2 * this.#pieceCap,
         maximumAlgorithmDecisionWaitMs: this.#pieceCap * VERSUS_LIMITS.deadlineMs,

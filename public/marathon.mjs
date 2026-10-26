@@ -6,6 +6,7 @@ export const MARATHON_COPY = Object.freeze({
   cap: 'Placement safety limit reached before the 300-line target. This run is capped, not a Marathon completion.',
 });
 export const linesProgress = lines => `${formatNumber(lines)} / ${formatNumber(RULES.targetLines)}`;
+export const levelProgress = level => `${formatNumber(level)} / ${formatNumber(RULES.maxLevel)}`;
 export function outcomeDetail(status, observation, error = null) {
   if (status === 'won') return `300-line target reached. Final score: ${formatNumber(observation.score)}. Lines cleared: ${formatNumber(observation.lines)}. Start a new game to play again.`;
   if (status === 'capped') return MARATHON_COPY.cap;

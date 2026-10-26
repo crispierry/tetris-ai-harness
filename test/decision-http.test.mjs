@@ -48,7 +48,8 @@ test('actual HTTP: real socket disconnect aborts owned upstream; ambiguous reser
   req.on('error',()=>{});req.end(JSON.stringify({packet:packet()}));await began;req.destroy();
   for(let n=0;n<30&&!f.aborted;n++)await wait(5);
   assert.equal(f.aborted,1);assert.equal(f.store.snapshot().used.attempts,1);
-  await wait(10);assert.equal(Object.values(f.store.snapshot().requests)[0].status,'uncertain');
+  for(let n=0;n<500&&Object.values(f.store.snapshot().requests)[0].status!=='uncertain';n++)await wait(2);
+  assert.equal(Object.values(f.store.snapshot().requests)[0].status,'uncertain');
 });
 test('canonical reconstruction rejects evidence/path/briefing/active/rules/candidate omission and unknown fields',()=>{
   const p=packet();assert.deepEqual(canonicalPacket(p),p);
@@ -81,14 +82,32 @@ test('actual HTTP: Reset immediately advances epoch and fences abort-ignoring ol
   await old;assert.ok(await fresh);assert.equal(controller.view.pieces,1);assert.equal(controller.view.observation.sessionId,'controller-1');
   assert.equal(f.bridge.lastReceipt.requestId,'controller-1:1:2');assert.equal(f.store.snapshot().used.attempts,2);
 });
-test('timeout, overlap and close abort; no fallback or late commit',async t=>{
-  let release;const f=await fixture(t,{timeoutMs:30,transport:async req=>{await new Promise(r=>release=r);return answer(req);}});
-  const p=packet(), promise=f.service.decide(f.grant.capability,p);while(!release)await wait(1);
-  await assert.rejects(f.service.decide(f.grant.capability,p),{code:'overlap'});
-  await assert.rejects(promise,{code:'cancelled'});release();await wait(5);assert.equal(f.calls,1);assert.equal(f.store.snapshot().used.attempts,1);
-  assert.equal(Object.values(f.store.snapshot().requests)[0].status,'uncertain');
-  const again=structuredClone(p);again.requestId='new-id-after-timeout';again.responseSchema.properties.requestId.const=again.requestId;
-  await assert.rejects(f.service.decide(f.grant.capability,again),{code:'unauthorized'});assert.equal(f.calls,1);
+test('deadline includes preparation; cancellation never falls back, retries or commits',async t=>{
+  // Thirty milliseconds can expire before dispatch under concurrent canonical/IO work.
+  // Observe rejection immediately and do not require an upstream entry to occur.
+  const f=await fixture(t,{timeoutMs:30,transport:async(req,{signal})=>{
+    if(!signal.aborted)await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));return answer(req);
+  }});
+  await assert.rejects(f.service.decide(f.grant.capability,packet()),{code:'cancelled'});
+  assert.ok(f.calls<=1);assert.equal(f.store.snapshot().runs[f.grant.runId].placements,0);
+  assert.ok(f.store.snapshot().used.attempts>=f.calls);assert.ok(f.store.snapshot().used.attempts<=1);
+  const requests=Object.values(f.store.snapshot().requests);
+  if(f.calls)assert.equal(requests[0].status,'uncertain');else if(requests.length)assert.equal(requests[0].status,'rejected');
+});
+test('gated dispatched request rejects overlap and abort retains ambiguous reservation without late commit',async t=>{
+  let release;const abort=new AbortController();
+  const f=await fixture(t,{transport:async req=>{await new Promise(r=>release=r);return answer(req);}});
+  const p=packet(),promise=f.service.decide(f.grant.capability,p,{signal:abort.signal});
+  const rejected=assert.rejects(promise,{code:'cancelled'});
+  try {
+    for(let n=0;n<500&&!release;n++)await wait(1);assert.ok(release,'transport entered within fixture bound');
+    await assert.rejects(f.service.decide(f.grant.capability,p),{code:'overlap'});
+    abort.abort();await rejected;assert.equal(f.calls,1);assert.equal(f.store.snapshot().used.attempts,1);
+    assert.equal(Object.values(f.store.snapshot().requests)[0].status,'uncertain');
+    const again=structuredClone(p);again.requestId='new-id-after-abort';again.responseSchema.properties.requestId.const=again.requestId;
+    await assert.rejects(f.service.decide(f.grant.capability,again),{code:'unauthorized'});
+  } finally {abort.abort();release?.();await rejected;await wait(1);}
+  assert.equal(f.store.snapshot().runs[f.grant.runId].placements,0);assert.equal(f.calls,1);
 });
 test('private ledger retains aggregate on clean reopen and fails closed on unresolved dispatch and second lifetime owner',async t=>{
   const f=await fixture(t);await assert.rejects(openDecisionStore({directory:f.directory,lineage:'offline-test',policy:f.policy}),{code:'EEXIST'});
@@ -273,4 +292,11 @@ test('actual HTTP: cancelled late epoch read cannot rewind a newer decision epoc
  const old=controller.step();while(!release)await wait(1);controller.reset();assert.ok(await controller.step());
  const receipt=bridge.lastReceipt;release();assert.equal(await old,null);assert.equal(bridge.lastReceipt,receipt);
  assert.equal(receipt.epoch,1);assert.equal(controller.view.pieces,1);assert.ok(await controller.step());assert.equal(f.calls,2);assert.equal(bridge.lastReceipt.epoch,1);
+});
+
+test('authenticated status and compact receipt preserve actual dated model identity separately from requested alias',async t=>{
+ const f=await fixture(t,{transport:async req=>{const result=answer(req);result.body.model='gpt-6-luna-2026-10-01';return result;}});
+ const c=new Controller({provider:f.bridge,sessionId:'controller',deadlineMs:2000});assert.ok(await c.step());
+ assert.equal(f.bridge.lastReceipt.requestedModel,'gpt-6-luna');assert.equal(f.bridge.lastReceipt.observedModel,'gpt-6-luna-2026-10-01');
+ assert.equal((await f.bridge.status()).observedModel,'gpt-6-luna-2026-10-01');assert.ok(Buffer.byteLength(JSON.stringify(f.bridge.lastReceipt))<=4096);
 });

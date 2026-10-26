@@ -1,3 +1,5 @@
+import { providerPolicy, compactReceipt } from './provider-policy.mjs';
+import { decisionRecord } from './decision-record.mjs';
 import { Controller, heuristic, mockProvider, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { createLookaheadProvider, LOOKAHEAD_VERSION } from './lookahead.mjs';
 import { freeze, VERSIONS } from './harness.mjs';
@@ -7,7 +9,7 @@ export const COMPARISON_VERSION = 'offline-comparison-2';
 export const LIMITS = freeze({ samples: 8, pieceCap: 1000, paceMin: 30, paceMax: 1000,
   nodeCap: 4000, timeMs: 1000, deadlineMs: 1500, placements: 2000, frames: 4000, exportBytes: 8 * 1024 * 1024 });
 export const PLAYERS = freeze({ local: 'Local heuristic', look1: 'Lookahead depth 1', look2: 'Lookahead depth 2',
-  delay: 'Delayed mock', error: 'Error mock' });
+  delay: 'Delayed mock', error: 'Error mock', openai:'OpenAI Decisions' });
 export const DEFAULT_CONFIG = freeze({ left: 'local', right: 'look1', samples: 1, pieceCap: 1000, paceMs: 150, nodeCap: 4000, timeMs: 500 });
 const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -20,10 +22,12 @@ export function validateConfig(input = {}) {
   for (const [key, min, max] of [['samples', 1, 8], ['pieceCap', 1, 1000], ['paceMs', 30, 1000], ['nodeCap', 1, 4000], ['timeMs', 1, 1000]]) {
     if (!Number.isInteger(c[key]) || c[key] < min || c[key] > max) throw new RangeError(`${key} must be a whole number from ${min} to ${max}.`);
   }
+  if ((c.left==='openai'||c.right==='openai') && (c.left!=='local'||c.right!=='openai'||c.samples!==1)) throw new RangeError('OpenAI comparison requires Local heuristic left, OpenAI right, and one sample.');
   if (2 * c.samples * c.pieceCap > LIMITS.placements) throw new RangeError('Planned placements exceed 2000.');
   return freeze(c);
 }
-function providerFor(key, config) {
+export function providerFor(key, config) {
+  if (key==='openai') throw new Error('Connect OpenAI before playing.');
   if (key === 'local') return heuristic();
   if (key === 'delay' || key === 'error') return mockProvider({ mode: key, delayMs: 250 });
   return createLookaheadProvider({ depth: key === 'look2' ? 2 : 1, nodeCap: config.nodeCap, callCap: config.nodeCap, timeMs: config.timeMs });
@@ -33,11 +37,11 @@ function compactObservation(o) {
     active: o.active ? { type: o.active.type, rotation: o.active.rotation, x: o.active.x, y: o.active.y, cells: o.active.cells.map(p => ({ x: p.x, y: p.y })) } : null,
     next: [...o.next], score: o.score, lines: o.lines, level: o.level, status: o.status, terminalReason: o.terminalReason };
 }
-function compactDecision(last) {
+function compactDecision(last, compactPath=false) {
   if (!last) return null;
   const c = last.candidate;
-  return { latencyMs: last.latencyMs, candidate: { piece: c.piece, orientation: c.orientation, cells: c.cells,
-    bounds: c.bounds, path: c.path, clearedRows: c.clearedRows, scoreDelta: c.scoreDelta, linesDelta: c.linesDelta,
+  return { receipt:compactReceipt(last.receipt), latencyMs: last.latencyMs, candidate: { piece: c.piece, orientation: c.orientation, cells: c.cells,
+    bounds: c.bounds, path: compactPath?c.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''):c.path, pathEncoding:compactPath?'LRCDH-1':undefined, clearedRows: c.clearedRows, scoreDelta: c.scoreDelta, linesDelta: c.linesDelta,
     features: c.features, featureDeltas: c.featureDeltas } };
 }
 function compactSearch(provider) {
@@ -46,6 +50,7 @@ function compactSearch(provider) {
     tier: provider.runMetadata.search.tier, limits: { nodeCap: provider.runMetadata.search.nodeCap, timeMs: provider.runMetadata.search.timeMs } } : null;
 }
 function lanePolicy(provider, key) {
+  if(provider.kind==='remote') return providerPolicy(provider);
   const p = provider.runMetadata?.search;
   if (!p) return freeze({ version: provider.version, kind: provider.kind, assistance: 'canonical-afterstates-v1',
     weights: HEURISTIC_WEIGHTS, tieOrder: 'Original candidate order', terminalPenalty: -1000000000, completionReward: 1000000000,
@@ -71,7 +76,7 @@ function replayView(frame) {
 export class Comparison {
   #config; #factory; #onChange; #lanes = []; #sample = 0; #epoch = 0; #timers = new Set(); #auto = false;
   #state = 'ready'; #locked = false; #frames = []; #frameBytes = 0; #pairs = []; #policies = []; #archiveError = null;
-  #decisionElapsedMs = 0;
+  #decisionElapsedMs = 0; #gameEpoch=0;
   #mode = 'live'; #replayIndex = -1; #replayLanes = []; #id = ++instances;
   #seeds = Array.from({ length: 8 }, (_, i) => (0x51f15e + Math.imul(i + 1, 0x9e3779b9)) >>> 0);
   constructor({ config = {}, onChange = () => {}, providerFactory = providerFor } = {}) {
@@ -93,8 +98,8 @@ export class Comparison {
   #setup() {
     this.#lanes = ['left', 'right'].map((side, index) => {
       const key = this.#config[side], provider = this.#factory(key, this.#config, { sample: this.#sample + 1, lane: index });
-      const lane = { key, provider, outcome: null, controller: null, policy: lanePolicy(provider, key) };
-      lane.controller = new Controller({ seed: this.#seeds[this.#sample], sessionId: `compare-${this.#id}-${this.#epoch}-${index}`,
+      const lane = { key, provider, outcome: null, controller: null, policy: this.#config.right==='openai'?providerPolicy(provider):lanePolicy(provider, key) };
+      lane.controller = new Controller({ seed: this.#seeds[this.#sample], sessionId: provider.controllerBinding?.sessionId ?? `compare-${this.#id}-${this.#epoch}-${index}`, gameEpoch:provider.kind==='remote'?this.#gameEpoch:0,
         provider, deadlineMs: LIMITS.deadlineMs, onChange: () => { if (this.#lanes.includes(lane)) this.#emit(); } });
       return lane;
     });
@@ -111,9 +116,9 @@ export class Comparison {
       sample: this.#sample + 1, lane: index, player: copy(view.player), policy: lane.policy }));
     const frame = freeze(copy({ version: 1, sample: this.#sample + 1, lane: index, event, status: view.status,
       observation: compactObservation(view.observation), pieces: view.pieces, player: view.player, assistance: view.assistance,
-      error: view.error?.slice(0, 500) ?? null, outcome: view.outcome, decision: compactDecision(view.lastDecision), search: view.search, policyId }));
+      error: view.error?.slice(0, 500) ?? null, outcome: view.outcome, decision: compactDecision(view.lastDecision,this.#config.right==='openai'), search: view.search, policyId }));
     const length = bytes(frame);
-    if (this.#frames.length >= LIMITS.frames || this.#frameBytes + length > LIMITS.exportBytes - 131072) {
+    if (this.#frames.length >= LIMITS.frames || this.#frameBytes + length > (this.#config.right==='openai'?16*1024*1024:LIMITS.exportBytes) - 131072) {
       this.#archiveError = 'Saved-frame capacity reached. Play stopped; existing frames and outcomes are retained.';
       this.#fence(); this.#state = 'stopped'; return;
     }
@@ -198,6 +203,7 @@ export class Comparison {
   pause() { if (this.#state === 'completed' && this.#mode === 'live') return; this.#fence(); this.#state = this.#mode === 'replay' ? 'replay' : 'paused'; this.#emit(); }
   stop() { if (this.#state === 'completed' && this.#mode === 'live') return; this.#fence('stopped'); this.#state = this.#mode === 'replay' ? 'replay' : 'stopped'; this.#emit(); }
   reset() {
+    this.#gameEpoch++;
     this.#fence('stopped'); this.#sample = 0; this.#locked = false; this.#frames = []; this.#frameBytes = 0;
     this.#pairs = []; this.#policies = []; this.#decisionElapsedMs = 0; this.#archiveError = null; this.#mode = 'live'; this.#replayIndex = -1; this.#replayLanes = [];
     this.#state = 'ready'; this.#setup(); this.#emit();
@@ -220,9 +226,10 @@ export class Comparison {
     return freeze({ expectedPairs: this.#config.samples, observedPairs: this.#pairs.length,
       missingPairs: this.#config.samples - this.#pairs.length, pairs: [...this.#pairs],
       scoreDifferenceRange: this.#pairs.length ? [Math.min(...this.#pairs.map(p => p.difference.score)), Math.max(...this.#pairs.map(p => p.difference.score))] : null,
-      meaning: 'Descriptive local algorithm/assistance comparison. Capped/error runs are censored; no winner or model-quality inference.' });
+      meaning: 'Descriptive player/assistance comparison. Capped/error runs are censored; no winner or model-quality inference.' });
   }
   exportRun() {
+    if(this.#config.right==='openai')return decisionRecord({mode:'comparison',policies:this.#policies,frames:this.#frames,finals:this.#lanes.map(l=>({score:l.controller.view.observation.score,lines:l.controller.view.observation.lines,pieces:l.controller.view.pieces})),reasons:this.#lanes.map(l=>l.outcome?.reason??l.controller.view.status),metadata:{config:{left:this.#config.left,right:this.#config.right,samples:this.#config.samples,pieceCap:this.#config.pieceCap,paceMs:this.#config.paceMs},archiveError:this.#archiveError,accounting:this.#lanes.filter(l=>l.provider.kind==='remote').map(l=>l.provider.runMetadata.admission)}});
     const record = freeze({ version: COMPARISON_VERSION, frameVersion: 1, rulesVersion: RULES.version, schemas: VERSIONS,
       config: this.#config, admission: {
         plannedPlacements: 2 * this.#config.samples * this.#config.pieceCap,

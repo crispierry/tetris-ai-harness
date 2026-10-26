@@ -1,43 +1,71 @@
+import { mountDecisionPairing } from './decision-session.mjs';
+import { providerPolicy } from './provider-policy.mjs';
+import { decisionRecord } from './decision-record.mjs';
 import { cells, RULES } from './engine.mjs';
-import { GEOMETRY } from './harness.mjs';
+import { GEOMETRY, freeze } from './harness.mjs';
 import { Controller, heuristic, mockProvider } from './controller.mjs';
 import { briefing } from './briefing.mjs';
-import { MARATHON_COPY, linesProgress, outcomeDetail } from './marathon.mjs';
-const $ = id => document.getElementById(id), format = new Intl.NumberFormat().format;
+import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail } from './marathon.mjs';
+export function mountHarness(doc,{window:win=globalThis,onExport=null}={}) {
+const $ = id => doc.getElementById(id), format = new Intl.NumberFormat().format;
 const STATUS = { ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped', over: 'Game over', won: MARATHON_COPY.complete, error: 'Error' };
-const board = $('h-board'), tiles = Array.from({length:RULES.width*RULES.height},()=>{const tile=document.createElement('span');tile.className='h-cell';tile.setAttribute('aria-hidden','true');board.append(tile);return tile;});
+const board = $('h-board'), tiles = Array.from({length:RULES.width*RULES.height},()=>{const tile=doc.createElement('span');tile.className='h-cell';tile.setAttribute('aria-hidden','true');board.append(tile);return tile;});
+let disposed=false,replayFrame=null,savedReplayJSON=null;
+let locked=false, frames=[],replay=false,replayIndex=0,pairing=null,provider=heuristic(),policy=null;
+let recordingBytes=0,archiveError=null;
 let auto = false, loopToken = 0, timer = null, previousStatus = 'ready';
 function announce(text) { $('h-announcement').textContent=text; }
 function render(view) {
+ if(disposed)return;
+ if(replay&&replayFrame)view=replayFrame;
+ if(!replay)pairing?.observe(view.lastDecision?.receipt);
  const obs=view.observation, active=new Map((obs.active?.cells??[]).map(p=>[`${p.x},${p.y}`,obs.active.type]));
  for(let y=0;y<RULES.height;y++)for(let x=0;x<RULES.width;x++){
   const falling=active.get(`${x},${y}`),type=falling??obs.board[y][x];
   tiles[y*RULES.width+x].className=`h-cell${type?` filled piece-${type}`:''}${falling?' active':''}`;
  }
  board.setAttribute('aria-label',`${RULES.width} columns by ${RULES.height} rows. ${obs.board.flat().filter(Boolean).length} locked cells. ${obs.active?`Falling ${obs.active.type} piece.`:'No falling piece.'}`);
- $('h-status').textContent=STATUS[view.status];$('player-heading').textContent=view.player.name;
- for(const key of ['score','lines','level'])$('h-'+key).textContent=format(obs[key]);$('h-pieces').textContent=format(view.pieces);$('h-lines').textContent=linesProgress(obs.lines);$('h-outcome').textContent=outcomeDetail(view.status,obs,view.error);
+ $('h-status').textContent=replay?'Saved visual replay':view.pieces>=1000&&obs.status!=='won'?'Capped':STATUS[view.status];$('player-heading').textContent=view.player.name;
+ for(const key of ['score','lines','level'])$('h-'+key).textContent=format(obs[key]);$('h-pieces').textContent=format(view.pieces);$('h-lines').textContent=linesProgress(obs.lines);$('h-level').textContent=levelProgress(obs.level);$('h-outcome').textContent=outcomeDetail(view.status,obs,view.error);
  $('h-next').replaceChildren();obs.next.forEach((type,index)=>{
-  const mini=document.createElement('div');mini.className=`h-mini piece-${type}`;mini.setAttribute('role','img');mini.setAttribute('aria-label',`Next ${index+1}: ${type}`);
+  const mini=doc.createElement('div');mini.className=`h-mini piece-${type}`;mini.setAttribute('role','img');mini.setAttribute('aria-label',`Next ${index+1}: ${type}`);
   const occupied=new Set(GEOMETRY.find(g=>g.type===type).orientations[0].cells.map(p=>`${p.x},${p.y}`));
-  for(let y=0;y<4;y++)for(let x=0;x<4;x++){const dot=document.createElement('span');if(occupied.has(`${x},${y}`))dot.className='filled';mini.append(dot);} $('h-next').append(mini);
+  for(let y=0;y<4;y++)for(let x=0;x<4;x++){const dot=doc.createElement('span');if(occupied.has(`${x},${y}`))dot.className='filled';mini.append(dot);} $('h-next').append(mini);
  });
  if(['over','won','error'].includes(view.status)&&previousStatus!==view.status){auto=false;loopToken++;clearTimeout(timer);announce(`Computer: ${STATUS[view.status]}. ${view.status==='won'?outcomeDetail('won',obs):view.error??`${format(view.pieces)} pieces, ${format(obs.lines)} lines.`}`);}
- const terminal=['over','won'].includes(view.status);$('h-start').textContent=['paused','stopped'].includes(view.status)?'Resume':'Start';$('h-start').disabled=auto||view.busy||terminal;$('h-step').disabled=auto||view.busy||terminal;
- $('h-pause').disabled=terminal||(!auto&&!view.busy);$('h-stop').disabled=view.status==='ready'||view.status==='stopped'||terminal;$('h-provider').disabled=auto||view.busy;
+ const unavailable=$('h-provider').value==='openai' && pairing?.session.state.state!=='connected';
+ const terminal=(!replay&&['over','won'].includes(view.status))||(!replay&&(view.pieces>=1000||archiveError))||(!replay&&view.recoveryRequired)||unavailable;$('h-start').textContent=replay?'Play saved frames':['paused','stopped'].includes(view.status)?'Resume':'Start';$('h-start').disabled=auto||view.busy||terminal||(replay&&replayIndex>=frames.length);$('h-step').disabled=auto||view.busy||terminal||(replay&&replayIndex>=frames.length);
+ $('h-pause').disabled=terminal||(!auto&&!view.busy);$('h-stop').disabled=view.status==='ready'||view.status==='stopped'||terminal;$('h-provider').disabled=locked;
+ if(!replay&&obs.status!=='won'&&(view.pieces>=1000||archiveError))$('h-outcome').textContent=archiveError??'Placement safety limit reached. The 300-line goal was not reached. Reset to play again.';
  $('h-error').hidden=!view.error;$('h-error').textContent=view.error??'';
- if(view.lastDecision){const c=view.lastDecision.candidate;$('h-choice').textContent=`${c.piece} · ${c.cells.map(p=>`(${p.x}, ${p.y})`).join(' ')} · ${Math.round(view.lastDecision.latencyMs)} ms`;$('h-details').textContent=JSON.stringify({orientation:c.orientation,path:c.path,clearedRows:c.clearedRows,scoreDelta:c.scoreDelta,features:c.features},null,2);}else{$('h-choice').textContent='No piece selected yet.';$('h-details').textContent='Run or step to inspect a choice.';}
+ if(view.lastDecision){const c=view.lastDecision.candidate;$('h-choice').textContent=`${c.piece} · ${c.cells.map(p=>`(${p.x}, ${p.y})`).join(' ')} · ${Math.round(view.lastDecision.latencyMs)} ms`;$('h-details').textContent=JSON.stringify({receipt:view.lastDecision.receipt??null,orientation:c.orientation,path:c.path,clearedRows:c.clearedRows,scoreDelta:c.scoreDelta,features:c.features},null,2);}else{$('h-choice').textContent='No piece selected yet.';$('h-details').textContent='Run or step to inspect a choice.';}
  previousStatus=view.status;
 }
-const controller=new Controller({sessionId:'harness',onChange:render});
-async function runLoop(token){if(!auto||token!==loopToken)return;await controller.step({continueRunning:true});if(auto&&token===loopToken&&controller.view.status==='running')timer=setTimeout(()=>runLoop(token),150);}
+let controller=new Controller({sessionId:'harness',provider,onChange:render});
+pairing=mountDecisionPairing(doc,{mode:'solo',lane:'solo',beforeConnect:()=>{if($('h-provider').value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if($('h-provider').value==='openai')chooseProvider();}});
+function chooseProvider(){if(locked)return;controller.stop();provider=$('h-provider').value==='openai'?pairing.session.provider:$('h-provider').value==='local'?heuristic():mockProvider({mode:$('h-provider').value});controller=new Controller({...(provider.kind==='remote'?pairing.session.binding:{sessionId:'harness'}),provider,onChange:render});policy=providerPolicy(provider);frames=[];render(controller.view);}
+function record(){const v=controller.view;if(v.lastDecision?.requestId && v.lastDecision.requestId===frames.at(-1)?.lastDecision?.requestId)return;if(!v.lastDecision&&frames.at(-1)?.status===v.status)return;const last=v.lastDecision;const frame=JSON.parse(JSON.stringify({...v,lastDecision:last?{requestId:last.requestId,latencyMs:last.latencyMs,receipt:last.receipt,candidate:{piece:last.candidate.piece,cells:last.candidate.cells,orientation:last.candidate.orientation,path:last.candidate.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''),pathEncoding:'LRCDH-1',clearedRows:last.candidate.clearedRows,scoreDelta:last.candidate.scoreDelta,features:last.candidate.features}}:null}));const bytes=new TextEncoder().encode(JSON.stringify(frame)).length;if(frames.length>=1000||recordingBytes+bytes>16*1024*1024-160*1024){archiveError='Recording limit reached. The 300-line goal was not reached. Reset to play again.';auto=false;controller.stop();$('h-outcome').textContent=archiveError;return;}recordingBytes+=bytes;frames.push(freeze(frame));}
+async function one(continuing=false){locked=true;await controller.step({continueRunning:continuing});record();await pairing?.refresh();if(controller.view.pieces>=1000||controller.view.recoveryRequired){auto=false;render(controller.view);}}
+function download(json){if(onExport){onExport(json);return;}const url=URL.createObjectURL(new Blob([json],{type:'application/json'}));const link=doc.createElement('a');link.href=url;link.download='tetris-solo-run.json';doc.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+async function runLoop(token){if(!auto||token!==loopToken)return;if(controller.view.pieces>=1000)return;await one(true);if(auto&&token===loopToken&&controller.view.status==='running')timer=setTimeout(()=>runLoop(token),150);}
 function pause(){auto=false;loopToken++;clearTimeout(timer);controller.pause();announce('Paused. Step once or Start to continue.');}
-$('h-start').addEventListener('click',()=>{auto=true;const token=++loopToken;controller.start();announce('Running local computer play.');runLoop(token);});
+function showSaved(){if(replayIndex>=frames.length){auto=false;render(replayFrame);return false;}replayFrame={...frames[replayIndex++],status:'paused'};render(replayFrame);return true;}
+function playSaved(token){if(!auto||token!==loopToken||disposed)return;if(showSaved())timer=setTimeout(()=>playSaved(token),150);}
+function exportRun(){if(replay&&savedReplayJSON)return savedReplayJSON;const v=controller.view;return decisionRecord({mode:'solo',policies:[policy??providerPolicy(provider)],frames,finals:[{score:v.observation.score,lines:v.observation.lines,pieces:v.pieces}],reasons:[archiveError??(v.observation.terminalReason??(v.pieces>=1000?'piece cap':v.error??v.status))],metadata:{accounting:provider.kind==='remote'?provider.runMetadata.admission:null}});}
+$('h-start').addEventListener('click',()=>{if(replay){auto=true;playSaved(++loopToken);return;}locked=true;auto=true;const token=++loopToken;controller.start();announce('Running computer play.');runLoop(token);});
 $('h-pause').addEventListener('click',pause);
-$('h-step').addEventListener('click',async()=>{await controller.step();if(controller.view.status==='paused')announce('One piece placed. Paused.');});
+$('h-step').addEventListener('click',async()=>{if(replay){showSaved();return;}await one();if(controller.view.status==='paused')announce('One piece placed. Paused.');});
 $('h-stop').addEventListener('click',()=>{auto=false;loopToken++;clearTimeout(timer);controller.stop();announce('Stopped. Board retained. Start continues; Reset begins again.');});
-$('h-reset').addEventListener('click',()=>{auto=false;loopToken++;clearTimeout(timer);controller.reset();announce('Reset. Ready to begin the same sequence.');});
-$('h-provider').addEventListener('change',()=>{controller.setProvider($('h-provider').value==='local'?heuristic():mockProvider({mode:$('h-provider').value}));render(controller.view);});
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&(auto||controller.view.busy))pause();});
-const list=document.createElement('ol');list.className='h-rules-list';briefing().instructions.forEach(text=>{const li=document.createElement('li');li.textContent=text;list.append(li);});$('h-rules').append(list);
-const examples=document.createElement('pre');examples.textContent=JSON.stringify(briefing().examples,null,2);$('h-rules').append(examples);render(controller.view);
+$('h-reset').addEventListener('click',()=>{auto=false;loopToken++;clearTimeout(timer);controller.reset();pairing?.session.reset();locked=false;frames=[];recordingBytes=0;archiveError=null;replay=false;replayFrame=null;savedReplayJSON=null;render(controller.view);announce('Reset. Ready to begin the same sequence.');});
+pairing?.setEnabled(false);
+$('h-provider').addEventListener('change',()=>{pairing?.setEnabled($('h-provider').value==='openai');try{chooseProvider();}catch{render(controller.view);announce('Connect OpenAI before playing.');}});
+$('h-replay').addEventListener('click',()=>{if(!frames.length)return;auto=false;loopToken++;clearTimeout(timer);savedReplayJSON=exportRun();controller.pause();replay=true;replayIndex=0;showSaved();announce('Saved visual replay. Step advances stored frames; no new decisions.');});
+$('h-export').addEventListener('click',()=>download(exportRun()));
+win.addEventListener?.('blur',()=>{if(auto||controller.view.busy)pause();});
+doc.addEventListener('visibilitychange',()=>{if(doc.hidden&&(auto||controller.view.busy))pause();});
+const list=doc.createElement('ol');list.className='h-rules-list';briefing().instructions.forEach(text=>{const li=doc.createElement('li');li.textContent=text;list.append(li);});$('h-rules').append(list);
+const examples=doc.createElement('pre');examples.textContent=JSON.stringify(briefing().examples,null,2);$('h-rules').append(examples);render(controller.view);
+
+const dispose=()=>{disposed=true;auto=false;loopToken++;clearTimeout(timer);controller.stop();pairing?.session.close().catch(()=>{});};win.addEventListener?.('pagehide',dispose);return {get controller(){return controller;},exportRun,dispose};
+}
+if(typeof document!=='undefined')mountHarness(document);
