@@ -107,7 +107,7 @@ export class Controller {
       if(!/Canonical recording capacity/.test(error.message))this.#record({kind:'error',requestId:job.requestId,revision:binding.revision,code:'decision-failed',recoveryRequired:this.#provider.kind==='remote'&&this.#provider.requiresReset===true},{status:'error'});this.#status = 'error';this.#recovery=this.#provider.kind==='remote' && this.#provider.requiresReset===true; this.#error = error.message+(this.#recovery?' — Reset required. Allowance is not refilled.':''); return null;
     } finally {
       clearTimeout(timer); if (abortListener) abort.signal.removeEventListener('abort', abortListener);
-      abort.abort(); if (this.#pending === job) this.#pending = null; this.#emit();
+      abort.abort(this.#last?.requestId===job.requestId?'placement-committed':undefined); if (this.#pending === job) this.#pending = null; this.#emit();
     }
   }
 }

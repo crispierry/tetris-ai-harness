@@ -1,6 +1,6 @@
 // Same-origin transport boundary, shared by the local server and owned fixture servers.
 const MAX = 1048576;
-const codes = new Set(['disabled','unavailable','unauthorized','overlap','input','epoch','revision','continuity','limit','budget','duplicate','collision','cancelled','transport_ambiguous','authentication','rate_limit','provider_error','refusal','schema','model_mismatch','size','unsupported_candidates','store_unavailable']);
+const codes = new Set(['disabled','unavailable','unauthorized','overlap','input','epoch','revision','continuity','limit','budget','duplicate','collision','cancelled','transport_ambiguous','authentication','rate_limit','provider_error','refusal','schema','model_mismatch','size','unsupported_candidates','store_unavailable','reconciliation_required','session_request_limit','session_expired','project_budget_limit','quota_unknown','pilot_usage_required']);
 export function createDecisionHandler({ service, host, origin, owner } = {}) {
   if (!service || !/^127\.0\.0\.1:\d{1,5}$/.test(host ?? '') || origin !== `http://${host}`) throw new Error('configuration');
   return async (request, response) => {
@@ -37,8 +37,8 @@ export function createDecisionHandler({ service, host, origin, owner } = {}) {
         if (Object.keys(body).length !== 1 || !Object.hasOwn(body,'packet')) { send(400,{error:'input'}); return true; }
         send(200,await service.decide(cap,body.packet,{signal:abort.signal}));
       } else {
-        if (Object.keys(body).some(k => !['action','epoch'].includes(k))) { send(400,{error:'input'}); return true; }
-        send(200,await service.control(cap,body.action,body.epoch));
+        if (Object.keys(body).some(k => !['action','epoch',...(service.browserRisk?['requestId']:[])].includes(k)) || (Object.hasOwn(body,'requestId')&&!['acceptDecision','interrupt'].includes(body.action))) { send(400,{error:'input'}); return true; }
+        send(200,await service.control(cap,body.action,body.epoch,service.browserRisk?{requestId:body.requestId}:undefined));
       }
     } catch (e) { send(e.code === 'unauthorized' ? 403 : 400,{error:codes.has(e.code) ? e.code : 'unavailable'}); }
     finally { request.off('aborted',disconnect); request.off('error',disconnect); response.off('close',responseClose); }

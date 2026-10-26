@@ -1,3 +1,4 @@
+import {bootstrapBrowserDecisionService} from './decision-browser-bootstrap.mjs';
 import { decisionStartupMode, bootstrapLiveDecisionService } from './decision-bootstrap.mjs';
 import http from 'node:http';
 import path from 'node:path';
@@ -41,6 +42,7 @@ if(startup.mode === 'fixture') {
   owner=createDecisionOwner({service:decisions});
   detachOwner=attachOwnerInput(process.stdin,owner,value=>process.stdout.write(JSON.stringify(value)+'\n'));
 }
+if(startup.mode==='browser'){decisions=await bootstrapBrowserDecisionService({args:process.argv.slice(2)});owner=createDecisionOwner({service:decisions});detachOwner=attachOwnerInput(process.stdin,owner,value=>process.stdout.write(JSON.stringify(value)+'\n'));}
 if (startup.mode === 'live') {
   decisions = await bootstrapLiveDecisionService({ args: process.argv.slice(2) });
   owner = createDecisionOwner({ service: decisions });

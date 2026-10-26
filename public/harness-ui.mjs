@@ -20,6 +20,7 @@ let auto = false, loopToken = 0, timer = null, previousStatus = 'ready';
 function announce(text) { $('h-announcement').textContent=text; }
 function render(view) {
  if(disposed)return;
+ $('h-reset').disabled=!replay&&!!pairing?.resetBlocked;
  if(replay&&replayFrame)view=replayFrame;
  if(!replay)pairing?.observe(view.lastDecision?.receipt);
  const obs=view.observation, active=new Map((obs.active?.cells??[]).map(p=>[`${p.x},${p.y}`,obs.active.type]));
@@ -36,7 +37,7 @@ function render(view) {
   for(let y=0;y<4;y++)for(let x=0;x<4;x++){const dot=doc.createElement('span');if(occupied.has(`${x},${y}`))dot.className='filled';mini.append(dot);} $('h-next').append(mini);
  });
  if(['over','won','error'].includes(view.status)&&previousStatus!==view.status){auto=false;loopToken++;clearTimeout(timer);announce(`Computer: ${STATUS[view.status]}. ${view.status==='won'?outcomeDetail('won',obs):view.error??`${format(view.pieces)} pieces, ${format(obs.lines)} lines.`}`);}
- const unavailable=$('h-provider').value==='openai' && pairing?.session.state.state!=='connected';
+ const unavailable=!replay&&$('h-provider').value==='openai' && (pairing?.session.state.state!=='connected'||pairing?.blocked);
  $('h-provenance').textContent=providerProvenance(policy??providerPolicy(provider),{recorded:replay,pending:unavailable && (pairing?.session.state.message ?? true)});
  const terminal=(!replay&&['over','won'].includes(view.status))||(!replay&&(view.pieces>=1000||archiveError))||(!replay&&view.recoveryRequired)||unavailable;$('h-start').textContent=replay?'Play saved frames':['paused','stopped'].includes(view.status)?'Resume':'Start';$('h-start').disabled=auto||view.busy||terminal||(replay&&replayIndex>=frames.length);$('h-step').disabled=auto||view.busy||terminal||(replay&&replayIndex>=frames.length);
  $('h-pause').disabled=terminal||(!auto&&!view.busy);$('h-stop').disabled=view.status==='ready'||view.status==='stopped'||terminal;$('h-provider').disabled=locked;
@@ -47,7 +48,7 @@ function render(view) {
 }
 let controller=new Controller({sessionId:'harness',provider,onChange:render,onTransition:transition});
 newJournal();
-pairing=mountDecisionPairing(doc,{mode:'solo',lane:'solo',beforeConnect:()=>{if($('h-provider').value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if($('h-provider').value==='openai')chooseProvider();}});
+pairing=mountDecisionPairing(doc,{mode:'solo',lane:'solo',onAvailabilityChange:()=>render(controller.view),beforeConnect:()=>{if($('h-provider').value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if($('h-provider').value==='openai')chooseProvider();}});
 function chooseProvider(){if(locked)return;controller.stop();provider=$('h-provider').value==='openai'?pairing.session.provider:$('h-provider').value==='local'?heuristic():mockProvider({mode:$('h-provider').value});controller=new Controller({...(provider.kind==='remote'?pairing.session.binding:{sessionId:'harness'}),provider,onChange:render,onTransition:transition});policy=providerPolicy(provider);newJournal();frames=[];render(controller.view);}
 function record(){const v=controller.view;if(v.lastDecision?.requestId && v.lastDecision.requestId===frames.at(-1)?.lastDecision?.requestId)return;if(!v.lastDecision&&frames.at(-1)?.status===v.status)return;const last=v.lastDecision;const frame=JSON.parse(JSON.stringify({...v,lastDecision:last?{requestId:last.requestId,latencyMs:last.latencyMs,receipt:last.receipt,candidate:{piece:last.candidate.piece,cells:last.candidate.cells,orientation:last.candidate.orientation,path:last.candidate.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''),pathEncoding:'LRCDH-1',clearedRows:last.candidate.clearedRows,scoreDelta:last.candidate.scoreDelta,features:last.candidate.features}}:null}));const bytes=new TextEncoder().encode(JSON.stringify(frame)).length;if(frames.length>=1000||recordingBytes+bytes>16*1024*1024-160*1024){journal.censor();archiveError='Recording limit reached. The 300-line goal was not reached. Reset to play again.';auto=false;controller.stop();$('h-outcome').textContent=archiveError;return;}recordingBytes+=bytes;frames.push(freeze(frame));}
 async function one(continuing=false){locked=true;await controller.step({continueRunning:continuing});record();if(journal.incomplete){archiveError=journal.archiveError;auto=false;controller.stop();}await pairing?.refresh();if(controller.view.pieces>=1000||controller.view.recoveryRequired){auto=false;render(controller.view);}}

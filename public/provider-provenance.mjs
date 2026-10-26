@@ -3,7 +3,8 @@
 export function providerProvenance(policy, { recorded = false, pending = false } = {}) {
   if (pending && !recorded) return typeof pending === 'string' ? pending : 'Not configured — Connect OpenAI before playing.';
   let message = 'Provider provenance unknown';
-  if (policy?.version === 'provider-policy-1') {
+  if(policy?.version==='provider-policy-browser-1'&&policy.transport==='project-limit-browser')message='Owner-approved live OpenAI · Current + next five; immediate afterstates; no external search';
+  else if (policy?.version === 'provider-policy-1') {
     if (policy.kind === 'localHeuristic') message = 'Independent local choices · No external provider calls';
     else if (policy.kind === 'localSearch') message = 'Local lookahead search · No external provider calls';
     else if (policy.kind === 'mock') message = 'Offline test fixture · No external provider calls';

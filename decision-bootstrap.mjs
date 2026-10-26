@@ -42,11 +42,12 @@ export async function readDecisionCredential({ file = DEFAULT_DECISION_KEY_FILE 
 }
 export function decisionStartupMode(args) {
   const flags = args.filter(a => a.startsWith('--decision-') || a.startsWith('--enroll-decision-'));
-  const known = a => ['--decision-fixture-owner','--enroll-decision-fixture','--decision-live-owner','--enroll-decision-live'].includes(a) || a.startsWith('--decision-live-config=');
+  const known = a => ['--decision-fixture-owner','--enroll-decision-fixture','--decision-live-owner','--enroll-decision-live','--decision-browser-owner','--enroll-decision-browser'].includes(a) || a.startsWith('--decision-live-config=') || a.startsWith('--decision-browser-config=');
   if (flags.some(a => !known(a)) || new Set(flags.map(a => a.split('=')[0])).size !== flags.length) reject();
-  const fixture = flags.includes('--decision-fixture-owner'), live = flags.includes('--decision-live-owner'), config = flags.find(a => a.startsWith('--decision-live-config='))?.slice('--decision-live-config='.length);
-  if ((flags.some(a => a.startsWith('--decision-live-config=')) && !live) || (fixture && live) || (flags.includes('--enroll-decision-fixture') && !fixture) || (flags.includes('--enroll-decision-live') && !live) || (config && !live) || (live && (!config || fixture || flags.includes('--enroll-decision-fixture'))) || (fixture && flags.includes('--enroll-decision-live'))) reject();
-  return { mode: live ? 'live' : fixture ? 'fixture' : 'off', config, enroll: flags.includes('--enroll-decision-live') };
+  const fixture=flags.includes('--decision-fixture-owner'),live=flags.includes('--decision-live-owner'),browser=flags.includes('--decision-browser-owner');
+  const config=flags.find(a=>a.startsWith(browser?'--decision-browser-config=':'--decision-live-config='))?.split('=').slice(1).join('=');
+  if([fixture,live,browser].filter(Boolean).length>1||flags.some(a=>a.includes('browser')&&!browser)||flags.some(a=>a.includes('live')&&!live)||flags.includes('--enroll-decision-fixture')&&!fixture||((live||browser)&&!config))reject();
+  return {mode:browser?'browser':live?'live':fixture?'fixture':'off',config,enroll:flags.includes(browser?'--enroll-decision-browser':'--enroll-decision-live')};
 }
 // Injectable loaders are for disposable dummy fixtures only. The production
 // entrypoint supplies none and cannot override the fixed credential location.

@@ -1,3 +1,4 @@
+import {validBrowserPolicy,validBrowserReceipt,validBrowserAccounting} from './public/browser-risk-contract.mjs';
 /** Node-only canonical record verifier. Dependency boundary: pure reducers only. */
 import {RULES,cells,start,move,rotate,softDrop,hardDrop,tick,togglePause,levelForLines} from './public/engine.mjs';
 import {VERSIONS,observe,enumerate,execute} from './public/harness.mjs';
@@ -33,7 +34,8 @@ function limits(p){allow(p,LIMIT_FIELDS,'policy limits');for(const v of Object.v
 function heuristicPolicy(p){keys(p,['weights','terminalPenalty','completionReward','terminalOrder','tieBreak'],'heuristic policy');keys(p.weights,['holes','aggregateHeight','maxHeight','bumpiness','lines'],'heuristic weights');for(const v of [...Object.values(p.weights),p.terminalPenalty,p.completionReward])if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>1e9)fail('heuristic numeric policy');if(typeof p.terminalOrder!=='string'||typeof p.tieBreak!=='string')fail('heuristic policy text');finiteJSON(p);}
 function policy(p){
  finiteJSON(p);if(size(p)>16384)fail('policy bytes');
- if(p?.version==='provider-policy-pilot-1'){
+ if(p?.version==='provider-policy-browser-1'){if(!validBrowserPolicy(p))fail('browser policy contract');}
+ else if(p?.version==='provider-policy-pilot-1'){
   pilotPolicy(p);
  }else if(p?.kind==='externalDecisions'){
   keys(p,['version','kind','provider','requestedModel','observedModel','transport','endpoint','protocol','assistance','visiblePreview','externalSearch','policyDigest','limits','actualCostUSD'],'external policy');
@@ -57,7 +59,7 @@ function pilotAccounting(a){
  if(a.mode!=='project-limit-pilot'||a.provider!=='OpenAI'||a.requestedModel!=='gpt-6-luna'||a.accountingMode!=='project-hard-limit-delay-risk'||!/^[a-f0-9]{64}$/.test(a.policyDigest)||a.reservedInputTokens!==null||a.estimatedReservationMicros!==null||a.actualExternalCalls!==null||a.actualCostUSD!==null||!['interrupted','terminal','closed'].every(k=>typeof a[k]==='boolean'))fail('pilot accounting contract');
  eq(a.spendControl,PILOT_SPEND,'pilot accounting spend');for(const k of ['attempts','completedResponses','placements','uncertain','remainingAttempts'])integer(a[k],0,3,'pilot accounting count');if(a.remainingAttempts!==3-a.attempts||a.completedResponses+a.uncertain>a.attempts||a.placements>a.completedResponses)fail('pilot accounting counts');integer(a.expiresAt,1,Number.MAX_SAFE_INTEGER,'pilot expiry');finiteJSON(a);
 }
-function accounting(a){if(a===null)return;if(Array.isArray(a)){if(a.length>2)fail('accounting lanes');a.forEach(accounting);return;}if(a.version==='decision-pilot-accounting-1'){pilotAccounting(a);return;}allow(a,ACCOUNT_FIELDS,'accounting');finiteJSON(a);if(a.limits)limits(a.limits);}
+function accounting(a){if(a===null)return;if(a?.version==='decision-browser-accounting-1'){if(!validBrowserAccounting(a))fail('browser accounting contract');return;}if(Array.isArray(a)){if(a.length>2)fail('accounting lanes');a.forEach(accounting);return;}if(a.version==='decision-pilot-accounting-1'){pilotAccounting(a);return;}allow(a,ACCOUNT_FIELDS,'accounting');finiteJSON(a);if(a.limits)limits(a.limits);}
 function pilotReceipt(r,i,p){
  keys(r,[...RECEIPT_FIELDS,'accountingMode'],'pilot receipt');finiteJSON(r);if(size(r)>4096||r.version!=='decision-pilot-receipt-1'||p.version!=='provider-policy-pilot-1'||r.provider!=='OpenAI'||r.requestedModel!==p.requestedModel||r.mode!==p.transport||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId||r.accountingMode!=='project-hard-limit-delay-risk'||r.actualCostUSD!==null||r.actualExternalCalls!==null||r.reservedInputTokens!==null||r.estimatedReservationMicros!==null||r.epoch!==0||r.attempts!==1||r.completedResponses!==1||r.completions!==1||r.placements!==1)fail('pilot receipt binding');
  keys(r.remainingAllowance,['attempts'],'pilot remaining allowance');integer(r.remainingAllowance.attempts,0,2,'pilot remaining attempts');if(!Number.isFinite(r.requestLatencyMs)||r.requestLatencyMs<0||r.requestLatencyMs>1500)fail('pilot latency');
@@ -65,6 +67,7 @@ function pilotReceipt(r,i,p){
  allow(r.usage,['input_tokens','output_tokens','total_tokens','cached_input_tokens','cache_read_input_tokens','cache_write_input_tokens','input_tokens_details'],'pilot usage');for(const [k,v]of Object.entries(r.usage)){if(k==='input_tokens_details'){allow(v,['cached_tokens','cache_write_tokens'],'pilot cache detail');for(const n of Object.values(v))integer(n,0,r.usage.input_tokens,'pilot cache tokens');}else integer(v,0,['input_tokens','output_tokens','total_tokens'].includes(k)?Number.MAX_SAFE_INTEGER:r.usage.input_tokens,'pilot tokens');}
 }
 function receipt(r,i,p){
+ if(p.version==='provider-policy-browser-1'){if(!validBrowserReceipt(r)||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId)fail('browser receipt binding');return;}
  if(p.version==='provider-policy-pilot-1'){pilotReceipt(r,i,p);return;}
  if(r===null){if(p.kind==='externalDecisions')fail('missing compact receipt');return;}
  keys(r,RECEIPT_FIELDS,'receipt');finiteJSON(r);if(size(r)>4096||r.version!=='decision-receipt-2'||r.provider!=='OpenAI'||r.requestedModel!==p.requestedModel||r.mode!==p.transport||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId)fail('receipt binding');

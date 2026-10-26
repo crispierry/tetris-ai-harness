@@ -18,9 +18,10 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const tiles = [0, 1].map(i => Array.from({ length: 200 }, () => { const e = doc.createElement('span'); e.className = 'comparison-cell'; e.setAttribute('aria-hidden', 'true'); $(`v-${i}-board`).append(e); return e; }));
   let previousAnnouncement = '', previousLaneStates = [], lastFrame = null, frameHandle = null, disposed = false;
   function render(view) {
+    $('v-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     if($('v-provider'))$('v-provider').disabled=view.frameCount>0;
     if($('v-1-heading'))text('v-1-heading',view.lanes[1].player.name);
-    const unavailable=$('v-provider')?.value==='openai' && pairing?.session.state.state!=='connected';
+    const unavailable=view.mode!=='replay'&&$('v-provider')?.value==='openai' && (pairing?.session.state.state!=='connected'||(pairing?.blocked&&!view.lanes[1].outcome));
     text('v-1-provenance', providerProvenance(view.policies?.[1], { recorded: view.mode === 'replay', pending: unavailable && (pairing?.session.state.message ?? true) }));
     const replay = view.mode === 'replay', finished = view.state === 'completed', archiveBlocked = !replay && !!view.archiveError;
     $('v-start').disabled = finished || view.running || view.busy || view.playback || archiveBlocked || unavailable;
@@ -72,7 +73,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const runner = runnerFactory({ onChange: render });
   const select=$('v-provider');let pairing;
   const configure=()=>runner.configure(()=>select.value==='openai'?pairing.session.provider:providerFor(select.value,{nodeCap:4000,timeMs:500}));
-  pairing=mountDecisionPairing(doc,{mode:'versus',lane:'algorithm',beforeConnect:()=>{if(select.value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if(select?.value==='openai')configure();}});
+  pairing=mountDecisionPairing(doc,{mode:'versus',lane:'algorithm',onAvailabilityChange:()=>render(runner.view),beforeConnect:()=>{if(select.value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if(select?.value==='openai')configure();}});
   select?.addEventListener('change',()=>{pairing?.setEnabled(select.value==='openai');try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}});
   pairing?.setEnabled(false);
   const act = fn => async () => { try { $('v-message').hidden = true; text('v-message', ''); await fn();await pairing?.refresh(); } catch (error) { $('v-message').hidden = false; text('v-message', error.message); } };

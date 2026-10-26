@@ -23,9 +23,11 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   let previousAnnouncement = '', previousLaneStates = [];
   function render(view) {
     SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (view.config.right==='openai' && ['nodeCap','timeMs'].includes(key)); });
+    $('c-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     const ended = view.mode === 'live' && view.sample >= view.config.samples && view.lanes.every(l => l.outcome);
-    $('c-start').disabled = view.auto || view.busy || ended || !!view.archiveError;
-    $('c-step').disabled = view.auto || view.busy || ended || !!view.archiveError;
+    const paidBlocked=view.mode!=='replay'&&view.config.right==='openai'&&pairing?.blocked&&!view.lanes[1].outcome;
+    $('c-start').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
+    $('c-step').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
     $('c-pause').disabled = !view.auto && !view.busy; $('c-stop').disabled = !view.locked;
     $('c-replay').disabled = !view.frameCount; $('c-export').disabled = !view.frameCount;
     text('c-start', view.mode === 'replay' ? 'Play saved frames' : view.locked ? 'Resume' : 'Start');
@@ -74,7 +76,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   }
   let pairing;
   const comparison = comparisonFactory({ onChange: render,providerFactory:(key,config)=>key==='openai'?pairing.session.provider:providerFor(key,config) });
-  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
+  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
   const settings = () => Object.fromEntries(SETTINGS.map(key => [key, ['left', 'right'].includes(key) ? $('c-' + key).value : Number($('c-' + key).value)]));
   const act = fn => async () => {
     try { $('c-error').hidden = true; text('c-error', ''); await fn(); }
@@ -85,7 +87,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   for (const action of ['start', 'step']) $('c-' + action).addEventListener('click', act(async () => {
     if (!comparison.view.locked) comparison.configure(settings()); await comparison[action](); await pairing?.refresh();
   }));
-  for (const action of ['pause', 'stop', 'reset', 'replay']) $('c-' + action).addEventListener('click', act(() => comparison[action]()));
+  for (const action of ['pause', 'stop', 'reset', 'replay']) $('c-' + action).addEventListener('click', act(async() => {comparison[action]();if(action==='reset'&&pairing?.session.state.admission?.mode==='project-limit-browser')await pairing.refresh();}));
   $('c-export').addEventListener('click', act(() => { onExport(comparison.exportRun()); text('c-announcement', 'Exported own saved visual frames. Private sequences omitted.'); }));
   globalThis.addEventListener?.('blur',()=>{if(comparison.view.auto||comparison.view.busy)comparison.pause();});
   doc.addEventListener('visibilitychange', () => { if (doc.hidden && (comparison.view.auto || comparison.view.busy)) comparison.pause(); });
