@@ -94,14 +94,17 @@ test('shared $10 final reservation allows 19 and rejects concurrent twentieth wi
 
 
 test('qualification is immutable and stale evidence disables the service before a further admission',async t=>{
-  const d=await directory(t), c=configuration();c.qualification.ceilingEvidence.validUntil=Date.now()+100;
-  const store=await openDecisionStore({directory:path.join(d,'ledger'),lineage:'expiry-dummy',policy:c.policy,enroll:true});
-  const service=createDecisionService({enabled:true,store,...c,credential:dummy});
+  const d=await directory(t), originalNow=Date.now;let at=originalNow(),store,service;
+  // Exercise expiry independently of parallel test load or durable-store setup time.
+  Date.now=()=>at;
   try {
+    const c=configuration(at);c.qualification.ceilingEvidence.validUntil=at+100;
+    store=await openDecisionStore({directory:path.join(d,'ledger'),lineage:'expiry-dummy',policy:c.policy,enroll:true});
+    service=createDecisionService({enabled:true,store,...c,credential:dummy});
     assert.equal(service.status().available,true);c.qualification.ceilingEvidence.status='hold';assert.equal(service.status().available,true);
-    await new Promise(r=>setTimeout(r,110));assert.deepEqual(service.status(),{available:false,reason:'qualification_required'});
+    at+=101;assert.deepEqual(service.status(),{available:false,reason:'qualification_required'});
     await assert.rejects(service.owner.issueRun({laneId:'late',controllerSessionBase:'late'}),{code:'unavailable'});assert.equal(store.snapshot().used.attempts,0);
-  } finally {await service.close();}
+  } finally {Date.now=originalNow;await (service??store)?.close();}
 });
 
 test('dummy loader failures are sanitized and release the newly opened durable store without copying the dummy value',async t=>{
