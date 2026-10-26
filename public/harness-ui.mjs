@@ -1,7 +1,7 @@
 import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
 import { providerPolicy } from './provider-policy.mjs';
-import { decisionRecord } from './decision-record.mjs';
+import { DecisionJournal } from './decision-record.mjs';
 import { cells, RULES } from './engine.mjs';
 import { GEOMETRY, freeze } from './harness.mjs';
 import { Controller, heuristic, mockProvider } from './controller.mjs';
@@ -13,7 +13,9 @@ const STATUS = { ready: 'Ready', running: 'Running', choosing: 'Choosing…', pa
 const board = $('h-board'), tiles = Array.from({length:RULES.width*RULES.height},()=>{const tile=doc.createElement('span');tile.className='h-cell';tile.setAttribute('aria-hidden','true');board.append(tile);return tile;});
 let disposed=false,replayFrame=null,savedReplayJSON=null;
 let locked=false, frames=[],replay=false,replayIndex=0,pairing=null,provider=heuristic(),policy=null;
-let recordingBytes=0,archiveError=null;
+let recordingBytes=0,archiveError=null,journal=null;
+function transition({input,view}){if(journal&&(!journal.incomplete||['computer','spawn'].includes(input.kind)))journal.append(0,input,view);}
+function newJournal(){journal=new DecisionJournal({mode:"solo"});journal.addLane(0,"computer",controller.view,policy??providerPolicy(provider));}
 let auto = false, loopToken = 0, timer = null, previousStatus = 'ready';
 function announce(text) { $('h-announcement').textContent=text; }
 function render(view) {
@@ -43,22 +45,23 @@ function render(view) {
  if(view.lastDecision){const c=view.lastDecision.candidate;$('h-choice').textContent=`${c.piece} · ${c.cells.map(p=>`(${p.x}, ${p.y})`).join(' ')} · ${Math.round(view.lastDecision.latencyMs)} ms`;$('h-details').textContent=JSON.stringify({receipt:view.lastDecision.receipt??null,orientation:c.orientation,path:c.path,clearedRows:c.clearedRows,scoreDelta:c.scoreDelta,features:c.features},null,2);}else{$('h-choice').textContent='No piece selected yet.';$('h-details').textContent='Run or step to inspect a choice.';}
  previousStatus=view.status;
 }
-let controller=new Controller({sessionId:'harness',provider,onChange:render});
+let controller=new Controller({sessionId:'harness',provider,onChange:render,onTransition:transition});
+newJournal();
 pairing=mountDecisionPairing(doc,{mode:'solo',lane:'solo',beforeConnect:()=>{if($('h-provider').value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if($('h-provider').value==='openai')chooseProvider();}});
-function chooseProvider(){if(locked)return;controller.stop();provider=$('h-provider').value==='openai'?pairing.session.provider:$('h-provider').value==='local'?heuristic():mockProvider({mode:$('h-provider').value});controller=new Controller({...(provider.kind==='remote'?pairing.session.binding:{sessionId:'harness'}),provider,onChange:render});policy=providerPolicy(provider);frames=[];render(controller.view);}
-function record(){const v=controller.view;if(v.lastDecision?.requestId && v.lastDecision.requestId===frames.at(-1)?.lastDecision?.requestId)return;if(!v.lastDecision&&frames.at(-1)?.status===v.status)return;const last=v.lastDecision;const frame=JSON.parse(JSON.stringify({...v,lastDecision:last?{requestId:last.requestId,latencyMs:last.latencyMs,receipt:last.receipt,candidate:{piece:last.candidate.piece,cells:last.candidate.cells,orientation:last.candidate.orientation,path:last.candidate.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''),pathEncoding:'LRCDH-1',clearedRows:last.candidate.clearedRows,scoreDelta:last.candidate.scoreDelta,features:last.candidate.features}}:null}));const bytes=new TextEncoder().encode(JSON.stringify(frame)).length;if(frames.length>=1000||recordingBytes+bytes>16*1024*1024-160*1024){archiveError='Recording limit reached. The 300-line goal was not reached. Reset to play again.';auto=false;controller.stop();$('h-outcome').textContent=archiveError;return;}recordingBytes+=bytes;frames.push(freeze(frame));}
-async function one(continuing=false){locked=true;await controller.step({continueRunning:continuing});record();await pairing?.refresh();if(controller.view.pieces>=1000||controller.view.recoveryRequired){auto=false;render(controller.view);}}
+function chooseProvider(){if(locked)return;controller.stop();provider=$('h-provider').value==='openai'?pairing.session.provider:$('h-provider').value==='local'?heuristic():mockProvider({mode:$('h-provider').value});controller=new Controller({...(provider.kind==='remote'?pairing.session.binding:{sessionId:'harness'}),provider,onChange:render,onTransition:transition});policy=providerPolicy(provider);newJournal();frames=[];render(controller.view);}
+function record(){const v=controller.view;if(v.lastDecision?.requestId && v.lastDecision.requestId===frames.at(-1)?.lastDecision?.requestId)return;if(!v.lastDecision&&frames.at(-1)?.status===v.status)return;const last=v.lastDecision;const frame=JSON.parse(JSON.stringify({...v,lastDecision:last?{requestId:last.requestId,latencyMs:last.latencyMs,receipt:last.receipt,candidate:{piece:last.candidate.piece,cells:last.candidate.cells,orientation:last.candidate.orientation,path:last.candidate.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''),pathEncoding:'LRCDH-1',clearedRows:last.candidate.clearedRows,scoreDelta:last.candidate.scoreDelta,features:last.candidate.features}}:null}));const bytes=new TextEncoder().encode(JSON.stringify(frame)).length;if(frames.length>=1000||recordingBytes+bytes>16*1024*1024-160*1024){journal.censor();archiveError='Recording limit reached. The 300-line goal was not reached. Reset to play again.';auto=false;controller.stop();$('h-outcome').textContent=archiveError;return;}recordingBytes+=bytes;frames.push(freeze(frame));}
+async function one(continuing=false){locked=true;await controller.step({continueRunning:continuing});record();if(journal.incomplete){archiveError=journal.archiveError;auto=false;controller.stop();}await pairing?.refresh();if(controller.view.pieces>=1000||controller.view.recoveryRequired){auto=false;render(controller.view);}}
 function download(json){if(onExport){onExport(json);return;}const url=URL.createObjectURL(new Blob([json],{type:'application/json'}));const link=doc.createElement('a');link.href=url;link.download='tetris-solo-run.json';doc.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function runLoop(token){if(!auto||token!==loopToken)return;if(controller.view.pieces>=1000)return;await one(true);if(auto&&token===loopToken&&controller.view.status==='running')timer=setTimeout(()=>runLoop(token),150);}
 function pause(){auto=false;loopToken++;clearTimeout(timer);controller.pause();announce('Paused. Step once or Start to continue.');}
 function showSaved(){if(replayIndex>=frames.length){auto=false;render(replayFrame);return false;}replayFrame={...frames[replayIndex++],status:'paused'};render(replayFrame);return true;}
 function playSaved(token){if(!auto||token!==loopToken||disposed)return;if(showSaved())timer=setTimeout(()=>playSaved(token),150);}
-function exportRun(){if(replay&&savedReplayJSON)return savedReplayJSON;const v=controller.view;return decisionRecord({mode:'solo',policies:[policy??providerPolicy(provider)],frames,finals:[{score:v.observation.score,lines:v.observation.lines,pieces:v.pieces}],reasons:[archiveError??(v.observation.terminalReason??(v.pieces>=1000?'piece cap':v.error??v.status))],metadata:{accounting:provider.kind==='remote'?provider.runMetadata.accounting:null}});}
+function exportRun(){if(replay&&savedReplayJSON)return savedReplayJSON;return journal.exportRun({metadata:{accounting:provider.kind==='remote'?provider.runMetadata.accounting:null}});}
 $('h-start').addEventListener('click',()=>{if(replay){auto=true;playSaved(++loopToken);return;}locked=true;auto=true;const token=++loopToken;controller.start();announce('Running computer play.');runLoop(token);});
 $('h-pause').addEventListener('click',pause);
 $('h-step').addEventListener('click',async()=>{if(replay){showSaved();return;}await one();if(controller.view.status==='paused')announce('One piece placed. Paused.');});
 $('h-stop').addEventListener('click',()=>{auto=false;loopToken++;clearTimeout(timer);controller.stop();announce('Stopped. Board retained. Start continues; Reset begins again.');});
-$('h-reset').addEventListener('click',()=>{auto=false;loopToken++;clearTimeout(timer);controller.reset();pairing?.session.reset();locked=false;frames=[];recordingBytes=0;archiveError=null;replay=false;replayFrame=null;savedReplayJSON=null;render(controller.view);announce('Reset. Ready to begin the same sequence.');});
+$('h-reset').addEventListener('click',()=>{auto=false;loopToken++;clearTimeout(timer);controller.reset();pairing?.session.reset();locked=false;frames=[];recordingBytes=0;archiveError=null;replay=false;replayFrame=null;savedReplayJSON=null;newJournal();render(controller.view);announce('Reset. Ready to begin the same sequence.');});
 pairing?.setEnabled(false);
 $('h-provider').addEventListener('change',()=>{pairing?.setEnabled($('h-provider').value==='openai');try{chooseProvider();}catch{render(controller.view);announce('Connect OpenAI before playing.');}});
 $('h-replay').addEventListener('click',()=>{if(!frames.length)return;auto=false;loopToken++;clearTimeout(timer);savedReplayJSON=exportRun();controller.pause();replay=true;replayIndex=0;showSaved();announce('Saved visual replay. Step advances stored frames; no new decisions.');});

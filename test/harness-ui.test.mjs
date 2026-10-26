@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {verifyDecisionUIRecord} from '../decision-record-verifier.mjs';
 class Element {
  constructor(){this.children=[];this.attributes={};this.listeners={};this.value='local';this.textContent='';this.disabled=false;}
  append(...children){this.children.push(...children);}
@@ -39,6 +40,6 @@ test('solo saved replay steps and plays immutable frames with zero provider deci
  const original=mounted.exportRun(),serial=mounted.controller.view.lastDecision.requestId;
  $('h-replay').trigger('click');assert.equal($('h-status').textContent,'Saved visual replay');assert.equal($('h-pieces').textContent,'1');
  await $('h-step').trigger('click');assert.equal($('h-pieces').textContent,'2');assert.equal(mounted.controller.view.lastDecision.requestId,serial);
- $('h-export').trigger('click');assert.equal(exported,original);assert.equal(JSON.parse(exported).version,'decision-ui-record-1');
+ $('h-export').trigger('click');assert.equal(exported,original);assert.equal(JSON.parse(exported).version,'decision-ui-record-2');assert.equal(verifyDecisionUIRecord(exported).ok,true);
  $('h-reset').trigger('click');assert.equal($('h-pieces').textContent,'0');assert.equal($('h-provider').disabled,false);mounted.dispose();
 });

@@ -1,5 +1,5 @@
 import { providerPolicy, compactReceipt, localSearchReceipt } from './provider-policy.mjs';
-import { decisionRecord } from './decision-record.mjs';
+import { DecisionJournal } from './decision-record.mjs';
 import { createGame, start, move, rotate, softDrop, hardDrop, tick, togglePause, DEFAULT_SEED, RULES } from './engine.mjs';
 import { Controller, heuristic, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { observe, freeze } from './harness.mjs';
@@ -42,7 +42,7 @@ export class HumanVersus {
   #id = ++instance; #session = 0; #human; #revision = 0; #pieces = 0; #humanOutcome = null;
   #externalPolicy=null; #ai; #aiOutcome = null; #provider; #factory; #epoch = 0; #timer = null; #state = 'ready';
   #pieceCap; #paceMs; #onChange; #frames = []; #bytes = 0; #recording = false; #archiveError = null;
-  #algorithmElapsedMs = 0; #humanGravityMs = 0;
+  #algorithmElapsedMs = 0; #humanGravityMs = 0; #journal=null; #savedExport=null;
   #mode = 'live'; #replayLanes = []; #replayIndex = -1; #playback = false;
   constructor({ pieceCap = 1000, paceMs = 500, providerFactory = () => heuristic(), onChange = () => {} } = {}) {
     if (!Number.isInteger(pieceCap) || pieceCap < 1 || pieceCap > 1000 || !Number.isInteger(paceMs) || paceMs < 150 || paceMs > 1000) throw new RangeError('Bounded piece cap and algorithm pace required.');
@@ -53,8 +53,11 @@ export class HumanVersus {
     this.#humanOutcome = null; this.#aiOutcome = null; this.#provider = this.#factory();this.#externalPolicy=this.#provider.kind==='remote'?providerPolicy(this.#provider):null;
     if (!['local', 'mock', 'remote'].includes(this.#provider?.kind)) throw new Error('Only local or test-mock algorithms are supported.');
     const controller = new Controller({ seed: DEFAULT_SEED, sessionId: this.#provider.controllerBinding?.sessionId ?? `versus-${this.#id}-${this.#epoch}`,gameEpoch:this.#provider.kind==='remote'?this.#session:0,
-      provider: this.#provider, deadlineMs: VERSUS_LIMITS.deadlineMs, onChange: () => { if (this.#ai === controller) this.#emit(); } });
+      provider: this.#provider, deadlineMs: VERSUS_LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(1,input,view);}, onChange: () => { if (this.#ai === controller) this.#emit(); } });
     this.#ai = controller;
+    this.#journal=this.#provider.kind==='remote'?new DecisionJournal({mode:'versus',pieceCap:this.#pieceCap}):null;this.#savedExport=null;
+    this.#journal?.addLane(0,'human',this.#humanView(),this.#policies()[0]);
+    this.#journal?.addLane(1,'computer',this.#ai.view,this.#policies()[1]);
   }
   configure(providerFactory) {if(this.#recording)throw new Error('Settings are locked until Reset.');this.#factory=providerFactory;this.#setup();this.#emit();}
   #humanView() {
@@ -79,19 +82,26 @@ export class HumanVersus {
       frameCount: this.#frames.length, replayIndex: this.#replayIndex, playback: this.#playback, archiveError: this.#archiveError });
   }
   #emit() { this.#onChange(this.view); }
+  #recordHuman(next,input,{pieces=this.#pieces,status=next.status,revision=this.#revision+1}={}) {
+    if(!this.#journal||this.#journal.incomplete||this.#mode!=='live')return true;
+    try{this.#journal.append(0,input,{observation:observe(next,{sessionId:`human-${this.#id}-${this.#session}`,revision}),pieces,status});return true;}
+    catch{this.#haltArchive();return false;}
+  }
   #fence(stop = false) {
     this.#epoch++; this.#playback = false; clearTimeout(this.#timer); this.#timer = null;
-    if (this.#human.status === 'playing') { this.#human = togglePause(this.#human); this.#revision++; }
+    if (this.#human.status === 'playing') { const next=togglePause(this.#human);if(this.#recordHuman(next,{kind:stop?'stop':'pause'},{status:stop?'stopped':'paused'})){this.#human=next;this.#revision++;} }
     if (!this.#aiOutcome) this.#ai[stop ? 'stop' : 'pause']();
   }
   #capacity() {
     if (this.#archiveError) return false;
+    if(this.#journal?.incomplete){this.#haltArchive();return false;}
     if (this.#frames.length >= VERSUS_LIMITS.frames - VERSUS_LIMITS.terminalReserveFrames || this.#bytes >= VERSUS_LIMITS.exportBytes - VERSUS_LIMITS.metadataReserveBytes) {
       this.#haltArchive(); return false;
     }
     return true;
   }
   #haltArchive() {
+    this.#journal?.censor();
     this.#archiveError = 'Saved recording capacity reached. Play stopped; unfinished lanes are censored, not Marathon completions. Replay/export contain only retained frames.';
     this.#state = 'stopped'; this.#fence(true); this.#emit();
   }
@@ -120,8 +130,8 @@ export class HumanVersus {
     if (this.#state === 'running' || this.#state === 'completed' || this.#ai.view.busy || !this.#capacity()) return;
     this.#beginRecording();
     if (!this.#humanOutcome) {
-      this.#human = this.#human.status === 'ready' ? start(this.#human) : this.#human.status === 'paused' ? togglePause(this.#human) : this.#human;
-      this.#revision++;
+      const next=this.#human.status==='ready'?start(this.#human):this.#human.status==='paused'?togglePause(this.#human):this.#human;
+      if(!this.#recordHuman(next,{kind:'resume'}))return;this.#human=next;this.#revision++;
     }
     this.#state = 'running'; this.#record(0, 'resume'); this.#emit();
     if (!this.#aiOutcome) this.#runAI(this.#epoch);
@@ -143,6 +153,10 @@ export class HumanVersus {
   }
   #applyHuman(next, event) {
     const old = this.#human; if (next === old) return;
+    const pieces=this.#pieces+(next.board!==old.board?1:0);
+    const capped=pieces>=this.#pieceCap&&next.status==='playing';
+    const retained=capped?togglePause(next):next;
+    if(!this.#recordHuman(retained,event,{pieces,status:capped?'capped':next.status}))return;
     this.#human = next; this.#revision++;
     const visible = next.active !== old.active || next.board !== old.board || next.status !== old.status;
     if (next.board !== old.board) this.#pieces++;
@@ -150,18 +164,18 @@ export class HumanVersus {
       this.#humanOutcome = this.#outcome(this.#humanView());
       if (this.#human.status === 'playing') this.#human = togglePause(this.#human);
     }
-    if (visible) { this.#record(0, this.#humanOutcome ? 'outcome' : event); this.#finish(); this.#emit(); }
+    if (visible) { this.#record(0, this.#humanOutcome ? 'outcome' : event.kind==='tick'?'gravity':event.action); this.#finish(); this.#emit(); }
   }
   input(action) {
     if (!Object.hasOwn(ACTIONS, action)) throw new RangeError('Unknown human action.');
     if (this.#mode !== 'live' || this.#state !== 'running' || this.#humanOutcome || !this.#capacity()) return;
-    this.#applyHuman(ACTIONS[action](this.#human), action);
+    this.#applyHuman(ACTIONS[action](this.#human), {kind:'human',action});
   }
   tick(elapsedMs) {
     if (!Number.isFinite(elapsedMs) || elapsedMs < 0) throw new RangeError('Nonnegative finite elapsed time required.');
     if (this.#mode !== 'live' || this.#state !== 'running' || this.#humanOutcome || !this.#capacity()) return;
     this.#humanGravityMs += Math.min(250, elapsedMs);
-    this.#applyHuman(tick(this.#human, Math.min(250, elapsedMs)), 'gravity');
+    this.#applyHuman(tick(this.#human, Math.min(250, elapsedMs)), {kind:'tick',elapsedMs:Math.min(250,elapsedMs)});
   }
   async #oneAI(epoch) {
     if (epoch !== this.#epoch || this.#aiOutcome || this.#ai.view.busy || !this.#capacity()) return;
@@ -171,6 +185,7 @@ export class HumanVersus {
     if (epoch === this.#epoch) this.#algorithmElapsedMs += performance.now() - started;
     if (epoch !== this.#epoch || controller !== this.#ai) return;
     const v = controller.view;
+    if(this.#journal?.incomplete){this.#haltArchive();return;}
     if (v.status === 'error' || v.status === 'over' || v.status === 'won' || v.pieces >= this.#pieceCap) this.#aiOutcome = this.#outcome(v);
     this.#record(1, this.#aiOutcome ? 'outcome' : 'placement'); this.#finish(); this.#emit();
   }
@@ -191,7 +206,7 @@ export class HumanVersus {
   }
   replay() {
     if (!this.#frames.length) throw new Error('Start or step before replaying saved frames.');
-    this.#state = 'replay'; this.#fence(); this.#mode = 'replay'; this.#replayIndex = -1;
+    this.#savedExport=this.exportRun();this.#state = 'replay'; this.#fence(); this.#mode = 'replay'; this.#replayIndex = -1;
     this.#replayLanes = this.#frames.slice(0, 2).map(frame => this.#savedView(frame));
     this.#playback = true; this.#playReplay(this.#epoch);
   }
@@ -204,7 +219,7 @@ export class HumanVersus {
     if (this.#nextReplay()) this.#timer = setTimeout(() => this.#playReplay(epoch), this.#paceMs);
   }
   exportRun() {
-    if(this.#provider.kind==='remote')return decisionRecord({mode:'versus',policies:this.#policies(),frames:this.#frames,finals:[this.#humanView(),this.#aiView()].map(v=>({score:v.observation.score,lines:v.observation.lines,pieces:v.pieces})),reasons:[this.#humanOutcome?.reason??this.#humanView().status,this.#aiOutcome?.reason??this.#aiView().status],metadata:{archiveError:this.#archiveError,accounting:this.#provider.runMetadata.accounting}});
+    if(this.#provider.kind==='remote')return this.#mode==='replay'?this.#savedExport:this.#journal.exportRun({metadata:{accounting:this.#provider.runMetadata.accounting}});
     const record = { version: VERSUS_VERSION, frameVersion: 1, rulesVersion: RULES.version,
       objective: RULES.objective, admission: { recording: versusRecordingAdmission(this.#pieceCap), plannedPlacements: 2 * this.#pieceCap,
         maximumAlgorithmDecisionWaitMs: this.#pieceCap * VERSUS_LIMITS.deadlineMs,

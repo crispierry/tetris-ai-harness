@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {verifyDecisionUIRecord} from '../decision-record-verifier.mjs';
 import {mountHarness} from '../public/harness-ui.mjs';
 import {mountVersus} from '../public/versus-ui.mjs';
 import {mountComparison} from '../public/comparison-ui.mjs';
@@ -40,7 +41,7 @@ for(const mode of ['comparison','versus','solo'])for(const action of mode==='com
   if(action==='stop')await $('c-stop').trigger('click');if(action==='focus')events.blur();
   const facts=$('decision-pairing').children[5].children[1];await until(()=>/1 reserved attempts/.test(facts.textContent));
   assert.match(facts.textContent,/allowance: 7/);assert.equal(choices,1);assert.ok(statusReads>=1);assert.equal(mode==='solo'?c.view.lastDecision:c.view.lanes[1].lastDecision,null);
-  await $(prefix+'-export').trigger('click');assert.equal(accounting(exported).freshness,'current');assert.equal(accounting(exported).attempts,1);assert.equal(accounting(exported).remainingAttempts,7);
+  await $(prefix+'-export').trigger('click');assert.equal(verifyDecisionUIRecord(JSON.stringify(exported)).ok,true);assert.equal(accounting(exported).freshness,'current');assert.equal(accounting(exported).attempts,1);assert.equal(accounting(exported).remainingAttempts,7);await $(prefix+'-pause').trigger('click');await $(prefix+'-stop').trigger('click');assert.equal(verifyDecisionUIRecord(exportRun()).ok,true);
   await $(prefix+'-replay').trigger('click');await $(prefix+'-pause').trigger('click');
   assert.match(provenance(),/^Recorded · Offline HTTP fixture via local server/);
   assert.equal(choices,1);

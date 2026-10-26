@@ -1,1 +1,1 @@
-{"name":"local-browser-app-scaffold","version":"0.0.0","private":true,"type":"module","engines":{"node":"24.22.1"},"scripts":{"test":"node --test","start":"node server.mjs"}}
+{"name":"local-browser-app-scaffold","version":"0.0.0","private":true,"type":"module","engines":{"node":"24.22.1"},"scripts":{"test":"node --test","start":"node server.mjs","verify:decision-record":"node verify-decision-record.mjs"}}

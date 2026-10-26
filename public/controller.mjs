@@ -1,3 +1,4 @@
+import {compactReceipt,localSearchReceipt} from './provider-policy.mjs';
 import { createGame, start, DEFAULT_SEED, isTerminal } from './engine.mjs';
 import { observe, enumerate, execute, candidateEvidence, freeze } from './harness.mjs';
 import { instructionPacket, validateChoice } from './briefing.mjs';
@@ -43,31 +44,34 @@ export function mockProvider({ mode = 'delay', delayMs = 350 } = {}) {
 let sessionCounter = 0;
 /** No timers/gravity mutate the game while waiting. Only a revalidated current response commits a piece. */
 export class Controller {
-  #recovery=false; #state; #seed; #revision = 0; #epoch = 0; #serial = 0; #pending = null; #provider; #status = 'ready'; #pieces = 0; #error = null; #last = null; #id; #deadline; #onChange;
-  constructor({ seed = DEFAULT_SEED, sessionId = `local-${++sessionCounter}`, provider = heuristic(), deadlineMs = 1500, gameEpoch = 0, onChange = () => {} } = {}) {
+  #recovery=false; #state; #seed; #revision = 0; #epoch = 0; #serial = 0; #pending = null; #provider; #status = 'ready'; #pieces = 0; #error = null; #last = null; #id; #deadline; #onChange; #onTransition;
+  constructor({ seed = DEFAULT_SEED, sessionId = `local-${++sessionCounter}`, provider = heuristic(), deadlineMs = 1500, gameEpoch = 0, onChange = () => {}, onTransition = () => {} } = {}) {
     if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,60}$/.test(sessionId) || !Number.isInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 60000) throw new TypeError('Invalid controller configuration');
     if (!Number.isInteger(gameEpoch) || gameEpoch < 0 || gameEpoch >= 100) throw new TypeError('Invalid game epoch');
-    this.#epoch=gameEpoch; this.#seed = seed; this.#state = createGame(seed); this.#id = sessionId; this.#deadline = deadlineMs; this.#onChange = onChange; this.setProvider(provider);
+    this.#epoch=gameEpoch; this.#seed = seed; this.#state = createGame(seed); this.#id = sessionId; this.#deadline = deadlineMs; this.#onChange = onChange; this.#onTransition=onTransition; this.setProvider(provider);
   }
   get #binding() { return { sessionId: `${this.#id}-${this.#epoch}`, revision: this.#revision }; }
   get view() { return freeze({ observation: observe(this.#state, this.#binding), status: this.#status, pieces: this.#pieces,
     error: this.#error, recoveryRequired:this.#recovery, lastDecision: this.#last, player: { name: this.#provider.name, kind: this.#provider.kind, version: this.#provider.version }, busy: !!this.#pending }); }
   #emit() { this.#onChange(this.view); }
+  #record(input,{state=this.#state,status=this.#status,pieces=this.#pieces,revision=this.#revision}={}) {
+    try{this.#onTransition({input,view:{observation:observe(state,{sessionId:`${this.#id}-${this.#epoch}`,revision}),status,pieces}});return true;}catch(error){if(!/Canonical recording capacity/.test(error.message))throw error;this.#status='stopped';this.#error=error.message;return false;}
+  }
   setProvider(provider) {
     if (this.#pending || this.#status === 'running') throw new Error('Pause before changing player');
     if (!provider || typeof provider.decide !== 'function' || typeof provider.name !== 'string' || !provider.name || !Number.isInteger(provider.capabilities?.maxCandidates) || provider.capabilities.maxCandidates < 1 || provider.capabilities.maxCandidates > 800 || provider.capabilities?.movementMode !== 'reachable-paused-gravity-v1' || provider.capabilities?.assistance !== 'canonical-afterstates-v1') throw new Error('Unsupported provider capability');
     if(this.#provider!==provider)this.#provider?.invalidateAccounting?.();this.#provider = provider;
   }
-  #cancel(status) { if(status==='stopped')this.#provider.invalidateAccounting?.();const pending = this.#pending; this.#pending = null; pending?.abort.abort();if(pending && this.#provider.kind==='remote'){this.#recovery=true;this.#error='Cancelled — Reset required. Allowance is not refilled.';this.#last=null;} this.#status = isTerminal(this.#state.status) ? this.#state.status : this.#recovery?'error':status; this.#emit(); }
+  #cancel(status,record=true) { if(record&&!isTerminal(this.#state.status)){const pending=this.#pending;this.#record(pending?{kind:'cancel',control:status,requestId:pending.requestId,revision:this.#revision}:{kind:status==='stopped'?'stop':'pause'},{status:this.#recovery||(pending&&this.#provider.kind==='remote')?'error':status});} if(status==='stopped')this.#provider.invalidateAccounting?.();const pending = this.#pending; this.#pending = null; pending?.abort.abort();if(pending && this.#provider.kind==='remote'){this.#recovery=true;this.#error='Cancelled — Reset required. Allowance is not refilled.';this.#last=null;} this.#status = isTerminal(this.#state.status) ? this.#state.status : this.#recovery?'error':status; this.#emit(); }
   pause() { this.#cancel('paused'); }
   stop() { this.#cancel('stopped'); }
-  reset() { this.#provider.invalidateAccounting?.();this.#cancel('stopped'); this.#epoch++; this.#recovery=false; this.#revision = 0; this.#state = createGame(this.#seed); this.#pieces = 0; this.#last = null; this.#error = null; this.#status = 'ready'; this.#emit(); }
-  start() {if(this.#recovery)return; if (this.#pending) throw new Error('Decision already in progress'); if (isTerminal(this.#state.status)) return; this.#error = null; this.#status = 'running'; this.#emit(); }
+  reset() { this.#provider.invalidateAccounting?.();this.#cancel('stopped',false); this.#epoch++; this.#recovery=false; this.#revision = 0; this.#state = createGame(this.#seed); this.#pieces = 0; this.#last = null; this.#error = null; this.#status = 'ready'; this.#emit(); }
+  start() {if(this.#recovery)return; if (this.#pending) throw new Error('Decision already in progress'); if (isTerminal(this.#state.status)) return; if(!this.#record({kind:'start'},{status:'running'})){this.#emit();return;} this.#error = null; this.#status = 'running'; this.#emit(); }
   async step({ continueRunning = false } = {}) {
     if(this.#recovery){this.#emit();return null;}
     if (this.#pending) throw new Error('Decision already in progress');
     if (isTerminal(this.#state.status)) return null;
-    if (this.#state.status === 'ready') { this.#state = start(this.#state); this.#revision++; }
+    if (this.#state.status === 'ready') { const next=start(this.#state);if(!this.#record({kind:'spawn'},{state:next,revision:this.#revision+1})){this.#emit();return null;}this.#state=next;this.#revision++; }
     const binding = this.#binding, current = this.#state, abort = new AbortController();
     const job = { abort, requestId: `${binding.sessionId}:${binding.revision}:${++this.#serial}` };
     this.#provider.invalidateAccounting?.();this.#last=null;this.#pending = job; this.#status = 'choosing'; this.#error = null; this.#emit();
@@ -90,13 +94,17 @@ export class Controller {
       if (new TextEncoder().encode(JSON.stringify(response)).length > 4096) throw new Error('Decision response exceeds size limit');
       const id = validateChoice(packet, response), candidate = candidates.find(c => c.id === id);
       const next = execute(current, candidate, binding), evidence = packet.candidates.find(c => c.id === id);
+      if(!this.#record({kind:'computer',requestId:job.requestId,revision:binding.revision,selectedCandidateId:candidate.id,
+        receipt:this.#provider.kind==='remote'?compactReceipt(this.#provider.lastReceipt):this.#provider.runMetadata?.search?localSearchReceipt(this.#provider.lastReceipt):null,latencyMs:performance.now()-started,
+        piece:candidate.piece,orientation:candidate.orientation,cells:candidate.cells,path:candidate.path},
+        {state:next,revision:this.#revision+1,pieces:this.#pieces+1,status:isTerminal(next.status)?next.status:continueRunning?'running':'paused'}))return null;
       this.#state = next; this.#revision++; this.#pieces++;
       this.#last = freeze({ candidate: evidence, latencyMs: performance.now() - started, requestId: job.requestId, player: this.#provider.name, receipt: this.#provider.lastReceipt ?? null });
       this.#status = isTerminal(next.status) ? next.status : continueRunning ? 'running' : 'paused';
       return this.#last;
     } catch (error) {
       if (this.#pending !== job) return null;
-      this.#status = 'error';this.#recovery=this.#provider.kind==='remote' && this.#provider.requiresReset===true; this.#error = error.message+(this.#recovery?' — Reset required. Allowance is not refilled.':''); return null;
+      if(!/Canonical recording capacity/.test(error.message))this.#record({kind:'error',requestId:job.requestId,revision:binding.revision,code:'decision-failed',recoveryRequired:this.#provider.kind==='remote'&&this.#provider.requiresReset===true},{status:'error'});this.#status = 'error';this.#recovery=this.#provider.kind==='remote' && this.#provider.requiresReset===true; this.#error = error.message+(this.#recovery?' — Reset required. Allowance is not refilled.':''); return null;
     } finally {
       clearTimeout(timer); if (abortListener) abort.signal.removeEventListener('abort', abortListener);
       abort.abort(); if (this.#pending === job) this.#pending = null; this.#emit();

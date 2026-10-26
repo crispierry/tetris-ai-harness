@@ -12,6 +12,7 @@ import {createDecisionOwner} from '../decision-owner.mjs';
 import {createDecisionBridge} from '../public/decision-bridge.mjs';
 import {Comparison,providerFor,validateConfig} from '../public/comparison.mjs';
 import {HumanVersus} from '../public/versus.mjs';
+import {verifyDecisionUIRecord} from '../decision-record-verifier.mjs';
 import {decisionRecord} from '../public/decision-record.mjs';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn){for(let n=0;n<500;n++){if(fn())return;await wait(2);}throw new Error('fixture gate not entered');}
@@ -30,21 +31,21 @@ test('external comparison enforces single right lane; delayed fixture leaves loc
  assert.throws(()=>validateConfig({left:'openai',right:'openai'}));assert.throws(()=>validateConfig({left:'look1',right:'openai'}));assert.throws(()=>validateConfig({right:'openai',samples:2}));
  const f=await fixture(t,{mode:'comparison',lane:'right',hold:true});const c=new Comparison({config:{left:'local',right:'openai',pieceCap:3,paceMs:30},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});t.after(()=>c.dispose());
  c.start();await until(()=>f.release);await until(()=>c.view.lanes[0].pieces>=2);assert.equal(c.view.lanes[1].pieces,0);assert.equal(c.view.lanes[0].policy.kind,'localHeuristic');assert.equal(c.view.lanes[1].policy.kind,'externalDecisions');assert.ok(!JSON.stringify(c.view.lanes[1].policy).includes('weights'));
- c.pause();f.release();await wait(5);assert.equal(c.view.lanes[1].pieces,0);assert.equal(c.view.lanes[1].recoveryRequired,true);
+ c.pause();assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);f.release();await wait(5);assert.equal(c.view.lanes[1].pieces,0);assert.equal(c.view.lanes[1].recoveryRequired,true);
  c.reset();c.reset();await c.step();assert.equal(c.view.lanes[1].pieces,1);assert.ok(c.view.lanes[1].observation.sessionId.endsWith('-2'));assert.equal(f.calls,2);
- const record=JSON.parse(c.exportRun());assert.equal(record.version,'decision-ui-record-1');assert.equal(record.mode,'comparison');assert.equal(record.objective.targetLines,300);assert.ok(!JSON.stringify(record).includes(f.grant.capability));
+ const record=JSON.parse(c.exportRun());assert.equal(record.version,'decision-ui-record-2');assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);assert.equal(record.mode,'comparison');assert.equal(record.objective.targetLines,300);assert.ok(!JSON.stringify(record).includes(f.grant.capability));
  const count=f.calls;c.replay();c.pause();await c.step();assert.equal(f.calls,count);assert.equal(c.view.lanes[1].status,'replay');
 });
 test('external versus human continues during wait; shared pause cancels, repeated Reset recovers same grant and no replay call',async t=>{
  const f=await fixture(t,{mode:'versus',lane:'algorithm',hold:true});const v=new HumanVersus({providerFactory:()=>f.bridge});t.after(()=>v.dispose());
- v.start();await until(()=>f.release);v.input('drop');assert.equal(v.view.lanes[0].pieces,1);assert.equal(v.view.lanes[1].pieces,0);v.pause();f.release();await wait(5);assert.equal(v.view.lanes[1].pieces,0);assert.equal(v.view.lanes[1].recoveryRequired,true);
+ v.start();await until(()=>f.release);v.input('drop');assert.equal(v.view.lanes[0].pieces,1);assert.equal(v.view.lanes[1].pieces,0);v.pause();assert.equal(verifyDecisionUIRecord(v.exportRun()).ok,true);f.release();await wait(5);assert.equal(v.view.lanes[1].pieces,0);assert.equal(v.view.lanes[1].recoveryRequired,true);
  v.reset();v.reset();await v.stepAlgorithm();assert.equal(v.view.lanes[0].pieces,0);assert.equal(v.view.lanes[1].pieces,1);assert.ok(v.view.lanes[1].observation.sessionId.endsWith('-2'));
- assert.equal(v.view.policies[1].transport,'http-fixture');assert.ok(!Object.hasOwn(v.view.policies[1],'weights'));const record=JSON.parse(v.exportRun());assert.equal(record.mode,'versus');assert.ok(record.frames.some(f=>f.lastDecision?.receipt?.version==='decision-receipt-2'));
- const calls=f.calls;v.replay();v.pause();await v.stepAlgorithm();v.input('drop');v.tick(250);assert.equal(f.calls,calls);
+ assert.equal(v.view.policies[1].transport,'http-fixture');assert.ok(!Object.hasOwn(v.view.policies[1],'weights'));const record=JSON.parse(v.exportRun());assert.equal(record.mode,'versus');assert.ok(record.events.some(f=>f.input?.receipt?.version==='decision-receipt-2'));assert.equal(verifyDecisionUIRecord(v.exportRun()).ok,true);
+ const calls=f.calls,original=v.exportRun();v.replay();v.pause();await v.stepAlgorithm();v.input('drop');v.tick(250);assert.equal(f.calls,calls);assert.equal(v.exportRun(),original);
 });
 test('request cap consumes no retry/refill; run status is authenticated and read-only',async t=>{
  const f=await fixture(t,{mode:'comparison',lane:'right',maxAttempts:1});const c=new Comparison({config:{left:'local',right:'openai',pieceCap:3},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});t.after(()=>c.dispose());
- await c.step();await c.step();assert.equal(f.calls,1);assert.equal(c.view.lanes[1].pieces,1);assert.match(c.view.lanes[1].error,/budget/);const before=f.store.snapshot();const status=await f.bridge.status();assert.equal(status.remainingAttempts,0);assert.deepEqual(f.store.snapshot(),before);
+ await c.step();await c.step();assert.equal(f.calls,1);assert.equal(c.view.lanes[1].pieces,1);assert.match(c.view.lanes[1].error,/budget/);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);const before=f.store.snapshot();const status=await f.bridge.status();assert.equal(status.remainingAttempts,0);assert.deepEqual(f.store.snapshot(),before);
  c.reset();await c.step();assert.equal(f.calls,1);assert.equal((await f.bridge.status()).remainingAttempts,0);
 });
 test('finite record envelope admits worst-case 1000 receipts and 2000 paired placement profile, rejects over-cap bytes/frames',()=>{
