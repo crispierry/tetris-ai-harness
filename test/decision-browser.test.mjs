@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import {mkdtemp,realpath,chmod,rm} from 'node:fs/promises';
+import {mkdtemp,realpath,chmod,rm,readFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -14,6 +14,9 @@ import {createDecisionOwner} from '../decision-owner.mjs';
 import {createDecisionHandler} from '../decision-http.mjs';
 import {createDecisionBridge} from '../public/decision-bridge.mjs';
 import {Controller,heuristic} from '../public/controller.mjs';
+import {DecisionJournal} from '../public/decision-record.mjs';
+import {mountComparison} from '../public/comparison-ui.mjs';
+import {DEFAULT_CONFIG} from '../public/comparison.mjs';
 import {Comparison,providerFor} from '../public/comparison.mjs';
 import {HumanVersus} from '../public/versus.mjs';
 import {mountHarness} from '../public/harness-ui.mjs';
@@ -77,5 +80,38 @@ test('all three actual browser-provider exporters verify canonical receipts/null
  const g=await fixture(t,{httpServer:true});const v=new HumanVersus({providerFactory:()=>g.bridge});await v.stepAlgorithm();v.start();v.tick(20);v.input('drop');v.pause();await settle(()=>!v.view.busy);json=v.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);v.dispose();
  const h=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})}),oldFetch=globalThis.fetch,nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
  globalThis.fetch=async(route,o={})=>{const response=await oldFetch(h.origin+route,{...o,headers:{origin:h.origin,...o.headers}});if(route==='/decision/pair/register'&&response.ok){const challenge=await response.clone().json(),body=JSON.parse(o.body);await h.owner.command({action:'approve',challengeId:challenge.challengeId,...body});}return response;};
- const mounted=mountHarness({getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},{window:{addEventListener(){}}});try{$('h-provider').value='openai';$('h-provider').trigger('change');await $('decision-pairing').children[1].trigger('click');assert.equal(mounted.controller.view.pieces,0);assert.equal($('decision-pairing').children[6].textContent,BROWSER_BUDGET_LINE);assert.equal($('decision-pairing').children[6].hidden,false);assert.match($('decision-pairing').children[2].textContent,/1,000 session requests remain/);await $('h-step').trigger('click');json=mounted.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);for(const secret of [dummy,fingerprint,'proj_dummy_browser','dummy private project evidence','dummy approval'])assert(!json.includes(secret));const r=JSON.parse(json);assert.equal(r.events.find(e=>e.input.receipt).input.receipt.reservedInputTokens,null);const mutate=structuredClone(r);mutate.lanes[0].policy.spendControl.riskAccepted=false;assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(mutate)));}finally{mounted.dispose();globalThis.fetch=oldFetch;}
+ const mounted=mountHarness({getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},{window:{addEventListener(){}}});try{$('h-provider').value='openai';$('h-provider').trigger('change');await $('decision-pairing').children[1].trigger('click');assert.equal(mounted.controller.view.pieces,0);assert.equal($('decision-budget-risk').textContent,BROWSER_BUDGET_LINE);assert.equal($('decision-budget-risk').hidden,false);assert.match($('decision-pairing').children[2].textContent,/1,000 session requests remain/);await $('h-step').trigger('click');json=mounted.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);for(const secret of [dummy,fingerprint,'proj_dummy_browser','dummy private project evidence','dummy approval'])assert(!json.includes(secret));const r=JSON.parse(json);assert.equal(r.events.find(e=>e.input.receipt).input.receipt.reservedInputTokens,null);const mutate=structuredClone(r);mutate.lanes[0].policy.spendControl.riskAccepted=false;assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(mutate)));}finally{mounted.dispose();globalThis.fetch=oldFetch;}
+});
+
+
+test('commit-confirmed ACK gates other grants before commit and keeps Pause/Reset safe during confirmation',async t=>{
+ for(const action of ['pause','reset']){
+  let release,entered,ackCount=0,calls=0;const gate=new Promise(r=>release=r),waiting=new Promise(r=>entered=r);
+  const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})}),other=await f.service.owner.issueRun({laneId:'other',controllerSessionBase:'other'});
+  const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,o)=>{const b=JSON.parse(o.body);if(b.action==='acceptDecision'){ackCount++;assert.equal(c.view.pieces,1);assert.equal(c.view.busy,true);}if(b.action==='runStatus'&&ackCount){entered();await gate;}return f.fetchHTTP(route,o);}});
+  const c=new Controller({sessionId:'browser',provider:bridge}),first=c.step();await waiting;assert.equal(c.view.pieces,1);assert.equal(c.view.busy,true);const last=c.view.lastDecision;c[action]();assert.equal(f.store.snapshot().browserSession.ownerHold,false);assert.equal(c.view.busy,true);await assert.rejects(c.step(),/already in progress/);
+  if(action==='pause'){assert.equal(c.view.lastDecision,last);assert.equal(c.view.status,'paused');}else{assert.equal(c.view.pieces,0);assert.equal(c.view.status,'ready');assert.equal(c.view.lastDecision,null);}
+  const second=await f.service.decide(other.capability,await packet('other'));await f.service.control(other.capability,'acceptDecision',undefined,{requestId:second.choice.requestId});assert.equal(calls,2);release();await first;assert.equal(c.view.busy,false);assert.equal(c.view.status,action==='reset'?'ready':'paused');assert.equal(c.view.pieces,action==='reset'?0:1);assert.equal(f.store.snapshot().browserSession.ownerHold,false);await bridge.close();
+ }
+});
+
+test('precommit delivery gate retains pending completion and cancellation sends no ACK',async t=>{
+ let release,entered,acks=0,calls=0;const gate=new Promise(r=>release=r),waiting=new Promise(r=>entered=r),f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})}),other=await f.service.owner.issueRun({laneId:'other',controllerSessionBase:'other'});
+ const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,o)=>{const b=JSON.parse(o.body);if(b.action==='acceptDecision')acks++;const r=await f.fetchHTTP(route,o);if(route==='/decision/choice'){entered();await gate;}return r;}}),c=new Controller({sessionId:'browser',provider:bridge}),first=c.step();await waiting;assert.equal(c.view.pieces,0);assert.equal(c.view.busy,true);assert.equal(f.service.status().available,false);await assert.rejects(f.service.decide(other.capability,await packet('other')));assert.equal(calls,1);c.pause();release();await first;await settle(()=>f.store.snapshot().browserSession.ownerHold);assert.equal(c.view.pieces,0);assert.equal(acks,0);await bridge.close();
+});
+
+test('lost ACK reply retains one committed placement and canonical prefix without duplicate failed request',async t=>{
+ let acks=0;const f=await fixture(t),bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,o)=>{const b=JSON.parse(o.body),r=await f.fetchHTTP(route,o);if(b.action==='acceptDecision'){acks++;throw new Error('dummy lost ACK reply');}return r;}});let journal;const c=new Controller({sessionId:'browser',provider:bridge,onTransition:({input,view})=>journal.append(0,input,view)});journal=new DecisionJournal({mode:'solo'});journal.addLane(0,'computer',c.view,providerPolicy(bridge));await c.step();assert.equal(c.view.pieces,1);assert.equal(c.view.busy,false);assert.equal(c.view.status,'error');assert(c.view.lastDecision);assert.equal(acks,1);assert.equal(bridge.blocked,true);const accounting=await f.service.control(f.grant.capability,'runStatus');assert.equal(accounting.ownerHold,true);c.pause();c.stop();const json=journal.exportRun({metadata:{accounting}});assert.equal(verifyDecisionUIRecord(json).ok,true);assert.equal(JSON.parse(json).events.filter(e=>e.input.kind==='computer').length,1);assert.equal(JSON.parse(json).events.filter(e=>e.input.kind==='error').length,0);await bridge.close();
+});
+
+test('invalid receipt or journal capacity prevents commit and ACK',async t=>{
+ for(const mode of ['receipt','capacity']){let acks=0;const f=await fixture(t),bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,o)=>{const b=JSON.parse(o.body);if(b.action==='acceptDecision')acks++;const r=await f.fetchHTTP(route,o);if(mode==='receipt'&&route==='/decision/choice'){const x=await r.json();x.receipt.version='wrong';return new Response(JSON.stringify(x));}return r;}});let journal;const c=new Controller({sessionId:'browser',provider:bridge,onTransition:({input,view})=>journal.append(0,input,view)});journal=new DecisionJournal({mode:'solo',eventLimit:mode==='capacity'?1:10});journal.addLane(0,'computer',c.view,providerPolicy(bridge));await c.step();await settle(()=>f.store.snapshot().browserSession.ownerHold);assert.equal(c.view.pieces,0);assert.equal(acks,0);await bridge.close();}
+});
+
+test('solo Choosing retains Pause/Stop while paid controls are fenced; comparison pending selection is truthful',async t=>{
+ let release,entered;const waiting=new Promise(r=>entered=r),f=await fixture(t,{httpServer:true,fetchImpl:upstream({hold:()=>new Promise(r=>{release=r;entered();})})}),oldFetch=globalThis.fetch,nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
+ globalThis.fetch=async(route,o={})=>{const r=await oldFetch(f.origin+route,{...o,headers:{origin:f.origin,...o.headers}});if(route==='/decision/pair/register'&&r.ok){const x=await r.clone().json();await f.owner.command({action:'approve',challengeId:x.challengeId,...JSON.parse(o.body)});}return r;};
+ const doc={getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},mounted=mountHarness(doc,{window:{addEventListener(){}}});try{$('h-provider').value='openai';$('h-provider').trigger('change');await $('decision-pairing').children[1].trigger('click');const step=$('h-step').trigger('click');await waiting;assert.equal($('h-pause').disabled,false);assert.equal($('h-stop').disabled,false);assert.equal($('h-start').disabled,true);assert.equal($('h-step').disabled,true);assert.equal($('h-reset').disabled,true);$('h-pause').trigger('click');release();await step;assert.equal(mounted.controller.view.pieces,0);}finally{release?.();mounted.dispose();globalThis.fetch=oldFetch;}
+ for(const [file,prefix]of [['harness.html','h'],['comparison.html','c'],['versus.html','v']]){const html=await readFile(new URL('../public/'+file,import.meta.url),'utf8');assert.equal((html.match(/id="decision-budget-risk"/g)??[]).length,1);assert(html.indexOf('id="decision-budget-risk"')<html.indexOf(`id="${prefix}-start"`));}
+ const n=new Map(),get=id=>{if(!n.has(id))n.set(id,new Element());return n.get(id);};for(const [k,v]of Object.entries(DEFAULT_CONFIG))get('c-'+k).value=String(v);const comparison=mountComparison({getElementById:get,createElement:()=>new Element(),addEventListener(){},hidden:false});try{get('c-right').value='openai';await get('c-right').trigger('change');assert.equal(get('c-start').disabled,true);assert.equal(get('c-step').disabled,true);assert.match(get('c-1-heading').textContent,/OpenAI Decisions/);assert.doesNotMatch(get('c-1-heading').textContent,/Lookahead/);assert.equal(get('c-error').hidden,true);}finally{comparison.dispose();}
 });

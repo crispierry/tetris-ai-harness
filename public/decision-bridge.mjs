@@ -6,7 +6,7 @@ const immutable = v => { if (v && typeof v === 'object') { Object.values(v).forE
 export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAccounting = () => {} } = {}) {
   if (!grant || !/^[a-f0-9]{64}$/.test(grant.capability ?? '') || !Number.isInteger(grant.epoch) || typeof grant.controllerSessionBase !== 'string' || typeof fetchImpl !== 'function') fail('configuration');
   const capability=grant.capability,base=grant.controllerSessionBase,browser=grant.admission?.mode==='project-limit-browser';
-  let epoch = grant.epoch, active = null, serial = 0, receipt = null, receiptSerial = 0, closed=false, status=grant.admission ?? null, requiresReset=false;
+  let epoch = grant.epoch, active = null, serial = 0, receipt = null, receiptSerial = 0, closed=false, status=grant.admission ?? null, requiresReset=false,confirmationUncertain=false;
   const statusReads=new Set(),statusAborts=new Set();
   let accountingRevision=0,statusSerial=0,freshness=status?'current':'unknown';
   const accounting=()=>freshness==='current'?immutable({...status,freshness:'current'}):immutable({freshness,attempts:null,remainingAttempts:null,reason:'Current accounting is unknown until authenticated reconciliation settles.'});
@@ -22,18 +22,27 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
     let result; try { result=JSON.parse(new TextDecoder().decode(data)); } catch { fail('schema'); }
     if (!response.ok) fail(typeof result.error === 'string' && /^[a-z_]{1,40}$/.test(result.error) ? result.error : 'unavailable'); return result;
   }
+  async function boundedControl(work){const abort=new AbortController();let timer;try{return await Promise.race([work(abort.signal),new Promise((_,reject)=>{timer=setTimeout(()=>{abort.abort();reject(Object.assign(new Error('confirmation_timeout'),{code:'confirmation_timeout'}));},1500);})]);}finally{clearTimeout(timer);abort.abort();}}
+  async function confirmCommitted(requestId){
+    const job=active;if(!browser||!job?.awaitingCommit||!job.committed||job.requestId!==requestId)fail('confirmation_state');
+    try{
+      await boundedControl(async signal=>{const accepted=await post('/decision/control',{action:'acceptDecision',requestId},signal);if(accepted.accepted!==true||active!==job||closed)fail('confirmation_state');active=null;invalidate();const value=immutable(await post('/decision/control',{action:'runStatus'},signal));if(!validBrowserAccounting(value)||closed)fail('schema');status=value;freshness='current';notify();});
+    }catch(error){confirmationUncertain=true;requiresReset=true;if(active===job)active=null;invalidate();await boundedControl(signal=>post('/decision/control',{action:'interrupt',requestId},signal)).catch(()=>{});throw error;}
+  }
   return Object.freeze({name:'OpenAI Decisions (server bridge)',kind:'remote',version:'decisions-http-1',
     capabilities: immutable({maxCandidates:255,movementMode:'reachable-paused-gravity-v1',assistance:'canonical-afterstates-v1'}),
     get runMetadata() { return immutable({mode:status?.mode ?? 'unverified',liveEnabled:status?.mode==='live'||browser,admission:browser?grant.admission:status,accounting:accounting(),actualCostUSD:status?.actualCostUSD ?? null}); },
     get controllerBinding() {return immutable({sessionId:base,gameEpoch:grant.epoch});},
     status:refreshStatus,
+    confirmCommitted:browser?confirmCommitted:undefined,
     invalidateAccounting:invalidate,
     async close() {closed=true;active=null;receipt=null;invalidate();const result=await post('/decision/control',{action:'close'});await Promise.allSettled([...statusReads]);return result;},
     get requiresReset(){return requiresReset||active?.dispatched===true;},
-    get blocked(){return browser&&(freshness!=='current'||browserBlocked(status));},
+    get blocked(){return browser&&(confirmationUncertain||!!active||freshness!=='current'||browserBlocked(status));},
     get lastReceipt() { return receipt; },
     async decide(packet,{signal}={}) {
       if(closed)fail('cancelled');
+      if(browser&&(confirmationUncertain||active))fail('reconciliation_required');
       if(browser&&freshness!=='current')await refreshStatus();
       if(browser&&browserBlocked(status))fail('reconciliation_required');
       receipt=null;invalidate();
@@ -41,7 +50,7 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
       if (packet?.observation?.sessionId !== `${base}-${nextEpoch}` || !Number.isSafeInteger(nextEpoch) || nextEpoch < epoch || nextEpoch < 0 || nextEpoch >= 100) fail('epoch');
       if (active && !active.signal?.aborted) fail('overlap');
       const job={id:++serial,signal,safeFailure:false,requestId:packet.requestId};active=job;
-      if(browser)signal?.addEventListener('abort',()=>{if(job.dispatched&&signal.reason!=='placement-committed'&&!job.safeFailure){requiresReset=true;void post('/decision/control',{action:'interrupt',requestId:job.requestId}).then(()=>refreshStatus(),()=>{}).catch(()=>{});}},{once:true});
+      if(browser)signal?.addEventListener('abort',()=>{if(signal.reason==='placement-committed'){job.committed=true;return;}if(job.dispatched&&!job.safeFailure){requiresReset=true;job.awaitingCommit=false;if(active===job)active=null;invalidate();void post('/decision/control',{action:'interrupt',requestId:job.requestId}).then(()=>refreshStatus(),()=>{}).catch(()=>{});}},{once:true});
       const current=()=>{if (signal?.aborted || active!==job) fail('cancelled');};
       try {
         current();
@@ -63,11 +72,11 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
         job.dispatched=true;let result;try{result=await post('/decision/choice',{packet},signal);current();
         const choice=result.choice;
         if (!choice || Object.keys(choice).length!==3 || choice.requestId!==packet.requestId || choice.stateRevision!==packet.stateRevision || !packet.candidates.some(c=>c.id===choice.selectedCandidateId) || new TextEncoder().encode(JSON.stringify(choice)).length>4096) fail('schema');
-        if(browser){const accepted=await post('/decision/control',{action:'acceptDecision',requestId:packet.requestId},signal);current();if(accepted.accepted!==true)fail('schema');}
         if (job.id >= receiptSerial) { receipt=compactReceipt(result.receipt); receiptSerial=job.id; }
+        if(browser)job.awaitingCommit=true;
         return immutable(choice);
         }catch(error){if(browser&&error.code==='refusal')job.safeFailure=true;if(active===job)requiresReset=true;throw error;}
-      } finally { if (active===job){active=null;invalidate();if(grant.admission){if(browser)await refreshStatus().catch(()=>{});else void refreshStatus().catch(()=>{});}} }
+      } finally { if(active===job){if(browser&&job.awaitingCommit){invalidate();}else{active=null;invalidate();if(grant.admission){if(browser)await refreshStatus().catch(()=>{});else void refreshStatus().catch(()=>{});}}} }
     },
   });
 }

@@ -25,7 +25,8 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (view.config.right==='openai' && ['nodeCap','timeMs'].includes(key)); });
     $('c-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     const ended = view.mode === 'live' && view.sample >= view.config.samples && view.lanes.every(l => l.outcome);
-    const paidBlocked=view.mode!=='replay'&&view.config.right==='openai'&&pairing?.blocked&&!view.lanes[1].outcome;
+    const selectingOpenAI=$('c-right').value==='openai',pendingOpenAI=view.mode!=='replay'&&!!pairing&&selectingOpenAI&&pairing.session.state.state!=='connected';
+    const paidBlocked=view.mode!=='replay'&&selectingOpenAI&&(pendingOpenAI||(pairing?.blocked&&!view.lanes[1].outcome));
     $('c-start').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
     $('c-step').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
     $('c-pause').disabled = !view.auto && !view.busy; $('c-stop').disabled = !view.locked;
@@ -38,8 +39,9 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     view.lanes.forEach((lane, index) => {
       if(view.mode!=='replay')pairing?.observe(lane.lastDecision?.receipt);
       const prefix = `c-${index}-`, obs = lane.observation;
-      text(prefix + 'heading', `${index ? 'Right' : 'Left'} · ${lane.player.name}`);
+      text(prefix + 'heading',index===1&&pendingOpenAI?'Right · OpenAI Decisions · Connect to request approval':`${index ? 'Right' : 'Left'} · ${lane.player.name}`);
       text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: index === 1 && $('c-right').value === 'openai' && pairing?.session.state.state !== 'connected' })} · ${lane.assistance}`);
+      if(index===1&&pendingOpenAI)text(prefix+'tier',pairing?.session.state.message??'Connect to request local owner approval.');
       for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
@@ -76,13 +78,13 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   }
   let pairing;
   const comparison = comparisonFactory({ onChange: render,providerFactory:(key,config)=>key==='openai'?pairing.session.provider:providerFor(key,config) });
-  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
+  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
   const settings = () => Object.fromEntries(SETTINGS.map(key => [key, ['left', 'right'].includes(key) ? $('c-' + key).value : Number($('c-' + key).value)]));
   const act = fn => async () => {
     try { $('c-error').hidden = true; text('c-error', ''); await fn(); }
     catch (error) { $('c-error').hidden = false; text('c-error', error.message); render(comparison.view); }
   };
-  SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => {pairing?.setEnabled(settings().right==='openai');for(const field of ['nodeCap','timeMs'])$('c-'+field).disabled=settings().right==='openai';comparison.configure(settings());})));
+  SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => {pairing?.setEnabled(settings().right==='openai');for(const field of ['nodeCap','timeMs'])$('c-'+field).disabled=settings().right==='openai';if(settings().right==='openai'&&pairing?.session.state.state!=='connected'){render(comparison.view);return;}comparison.configure(settings());})));
   pairing?.setEnabled(false);
   for (const action of ['start', 'step']) $('c-' + action).addEventListener('click', act(async () => {
     if (!comparison.view.locked) comparison.configure(settings()); await comparison[action](); await pairing?.refresh();
