@@ -1,5 +1,6 @@
+import {qualifiedDecisionPilot,pilotUsage,PILOT_MODE} from './decision-pilot-qualification.mjs';
 import { qualifiedDecisions } from './decision-qualification.mjs';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { digest } from './decision-store.mjs';
 import { packetCheck, requestFor, parse } from './choice-protocol.mjs';
 import { createGame, cells } from './public/engine.mjs';
@@ -164,4 +165,55 @@ export function createDecisionService({ enabled = false, store, policy, qualific
       await store?.close();
     },
   });
+}
+
+// Dedicated foreground pilot only. The ordinary server never calls this factory.
+// Count-only admission is intentionally separate from the strict reservation path.
+export function createDecisionPilotService({store,policy,qualification,credential,fetchImpl=globalThis.fetch}={}){
+ policy=freeze(structuredClone(policy));qualification=freeze(structuredClone(qualification));
+ if(!store||store.fixtureOnly||!qualifiedDecisionPilot(qualification,policy)||typeof credential!=='string'||createHash('sha256').update(credential,'utf8').digest('hex')!==qualification.projectEvidence.keyFingerprint||typeof fetchImpl!=='function'||store.snapshot().policyDigest!==digest(policy))fail('pilot_configuration');
+ let closing=false,slot=null;const operations=new Set(),upstreams=new Set();
+ const status=()=>freeze({available:!closing&&store.sound&&qualifiedDecisionPilot(qualification,policy)&&!Object.values(store.snapshot().runs).some(r=>r.interrupted),reason:closing?'shutdown':!store.sound?'store_unavailable':!qualifiedDecisionPilot(qualification,policy)?'pilot_expired':Object.values(store.snapshot().runs).some(r=>r.interrupted)?'pilot_stopped':'owner-risk-accepted-pilot'});
+ const authenticate=(capability,s,{read=false}={})=>{if(!read&&!status().available)fail('unavailable');if(typeof capability!=='string'||!/^[a-f0-9]{64}$/.test(capability))fail('unauthorized');const run=Object.values(s.runs).find(r=>r.capabilityDigest===digest(capability));if(!run||(!read&&(run.closed||run.terminal||run.interrupted||Date.now()>=run.expiresAt)))fail('unauthorized');return run;};
+ const stop=async(run,key,sent)=>{await store.transact(s=>{const r=s.runs[run.id];if(r)r.interrupted=true;if(key&&s.requests[key]&&s.requests[key].status!=='completed')s.requests[key].status=sent?'uncertain':'rejected';});};
+ async function control(capability,action,epoch){
+  const run=authenticate(capability,await store.inspect(),{read:true});if(epoch!==undefined||!['runStatus','close'].includes(action)){slot?.abort.abort();await stop(run);fail('pilot_control');}
+  if(action==='close'){slot?.abort.abort();await store.transact(s=>{s.runs[run.id].closed=true;});return {closed:true,epoch:0};}
+  await Promise.allSettled([...operations]);
+  const s=await store.inspect(),r=s.runs[run.id],requests=Object.values(s.requests).filter(x=>x.runId===r.id);
+  return freeze({version:'decision-pilot-accounting-1',mode:PILOT_MODE,provider:'OpenAI',requestedModel:config.model,observedModel:requests.findLast(x=>x.status==='completed')?.observedModel??null,policyDigest:s.policyDigest,accountingMode:'project-hard-limit-delay-risk',spendControl:{configuredProjectLimitUSD:1,enforcementDelayOvershoot:'unquantified',riskAccepted:true},attempts:s.used.attempts,completedResponses:requests.filter(x=>x.status==='completed').length,placements:r.placements,uncertain:requests.filter(x=>x.status==='uncertain'||x.status==='dispatch-intent').length,remainingAttempts:Math.max(0,3-s.used.attempts),reservedInputTokens:null,estimatedReservationMicros:null,actualExternalCalls:null,actualCostUSD:null,interrupted:r.interrupted,terminal:r.terminal,closed:r.closed,expiresAt:r.expiresAt});
+ }
+ async function decide(capability,packet,{signal}={}){
+  const run=authenticate(capability,store.snapshot(),{read:true});let key=null,sent=false,completed=false,job,timer,listener;
+  const started=performance.now();
+  const work=(async()=>{try{
+   // Once authenticated, every failure durably stops this one-run pilot.
+   authenticate(capability,store.snapshot());if(slot)fail('overlap');
+   job={abort:new AbortController()};slot=job;
+   if(signal?.aborted)fail('cancelled');listener=()=>job.abort.abort();signal?.addEventListener('abort',listener,{once:true});
+   const remaining=Math.min(1500,policy.expiresAt-Date.now(),packet?.deadlineMs??1500);if(remaining<=0)fail('expired');timer=setTimeout(()=>job.abort.abort(),remaining);const deadline=Date.now()+remaining;
+   const current=()=>{if(job.abort.signal.aborted||Date.now()>=deadline||!status().available||store.snapshot().runs[run.id].closed||store.snapshot().runs[run.id].interrupted)fail('cancelled');};
+   const p=canonicalPacket(packet);if(p.observation.sessionId!==`${run.controllerSessionBase}-0`)fail('epoch');const request=requestFor('decisions',p,config);if(Buffer.byteLength(JSON.stringify(request.body))>1048576)fail('input');
+   key=`${run.id}:0:${p.requestId}`;
+   await store.transact(s=>{current();const r=authenticate(capability,s);if(s.requests[key])fail(s.requests[key].digest===digest(p)?'duplicate':'collision');if(s.used.attempts>=3||r.placements>=3||Object.keys(s.requests).length>=3)fail('limit');
+    if(!r.expected){if(p.stateRevision!==1)fail('revision');}else{const e=r.expected,o=p.observation;if(p.stateRevision!==e.revision||!same(o.board,e.board)||!same(o.active,e.active)||o.score!==e.score||o.lines!==e.lines||o.level!==e.level||!same(o.next.slice(0,4),e.next))fail('continuity');}
+    s.used.attempts++;s.requests[key]={digest:digest(p),status:'reserved',upstream:true,deadline,runId:run.id,epoch:0};
+   });current();await store.transact(s=>{current();s.requests[key].status='dispatch-intent';});current();sent=true;
+   const dispatched=Promise.resolve().then(async()=>{
+    // Exact private project binding; no caller-provided headers or endpoint.
+    const response=await fetchImpl('https://api.openai.com/v1/decisions',{method:'POST',redirect:'error',headers:{'content-type':'application/json',authorization:`Bearer ${credential}`,'OpenAI-Project':qualification.projectEvidence.projectId},body:JSON.stringify(request.body),signal:job.abort.signal});
+    let bytes=0;const chunks=[];for await(const chunk of response.body){bytes+=chunk.length;if(bytes>65536){job.abort.abort();fail('size');}chunks.push(chunk);}let body;try{body=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{fail('schema');}return {status:response.status,body};
+   });upstreams.add(dispatched);job.dispatched=dispatched;
+   dispatched.then(()=>{upstreams.delete(dispatched);job.settled=true;if(slot===job&&job.finished)slot=null;},()=>{upstreams.delete(dispatched);job.settled=true;if(slot===job&&job.finished)slot=null;});
+   const cancelled=new Promise((_,reject)=>{const cancel=()=>reject(Object.assign(new Error('cancelled'),{code:'cancelled'}));if(job.abort.signal.aborted)cancel();else job.abort.signal.addEventListener('abort',cancel,{once:true});});
+   const result=await Promise.race([dispatched,cancelled]);current();const decoded=parse('decisions',result,p),usage=pilotUsage(result.body?.usage),observedModel=result.body.model,selected=p.candidates.find(c=>c.id===decoded.choice.selectedCandidateId);
+   await store.transact(s=>{current();const r=s.runs[run.id];r.expected=selected.afterstate;r.placements++;r.terminal=selected.afterstate.status!=='playing';s.requests[key].status='completed';s.requests[key].observedModel=observedModel;});completed=true;current();
+   return freeze({choice:decoded.choice,receipt:{version:'decision-pilot-receipt-1',provider:'OpenAI',requestedModel:config.model,observedModel,requestLatencyMs:performance.now()-started,completions:1,placements:1,actualExternalCalls:null,remainingAllowance:{attempts:Math.max(0,3-store.snapshot().used.attempts)},completedResponses:1,mode:PILOT_MODE,runId:run.id,laneId:run.laneId,epoch:0,lineage:store.snapshot().lineage,policyDigest:store.snapshot().policyDigest,usage,estimatedReservationMicros:null,reservedInputTokens:null,requestId:p.requestId,stateRevision:p.stateRevision,selectedCandidateId:decoded.choice.selectedCandidateId,attempts:1,actualCostUSD:null,usageProvenance:'Provider-reported usage; actual billing unknown; project-limit enforcement delay risk accepted',accountingMode:'project-hard-limit-delay-risk'}});
+  }catch(error){if(slot&&slot!==job)slot.abort.abort();try{await stop(run,key,sent);}catch{closing=true;}const code=['unavailable','unauthorized','overlap','cancelled','expired','input','epoch','duplicate','collision','limit','revision','continuity','size','schema','authentication','rate_limit','transport_ambiguous','model_mismatch','refusal','provider_error','unsupported_candidates','store_unavailable','pilot_usage_required'].includes(error.code)?error.code:'pilot_failed';throw Object.assign(new Error(code),{code});}
+  finally{clearTimeout(timer);signal?.removeEventListener('abort',listener);job?.abort.abort();if(job)job.finished=true;if(slot===job&&(!job?.dispatched||job.settled))slot=null;}})();operations.add(work);try{return await work;}finally{operations.delete(work);}
+ }
+ return Object.freeze({status,control,decide,owner:Object.freeze({async issueRun({laneId='pilot',controllerSessionBase='pilot'}={}){
+  if(!status().available||!/^[A-Za-z0-9_-]{1,60}$/.test(laneId)||!/^[A-Za-z0-9_-]{1,60}$/.test(controllerSessionBase))fail('pilot_configuration');const capability=randomBytes(32).toString('hex'),id=randomUUID();
+  await store.transact(s=>{if(!status().available||Object.keys(s.runs).length||s.used.attempts||s.policyDigest!==digest(policy))fail('limit');s.runs[id]={id,laneId,controllerSessionBase,capabilityDigest:digest(capability),expiresAt:policy.expiresAt,epoch:0,placements:0,expected:null,closed:false,terminal:false,interrupted:false};});return freeze({capability,runId:id,epoch:0,expiresAt:policy.expiresAt,controllerSessionBase});
+ }}),async close(){closing=true;slot?.abort.abort();await Promise.allSettled([...operations]);if(upstreams.size){let timer;try{await Promise.race([Promise.allSettled([...upstreams]),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('drain_pending'),{code:'drain_pending'})),1000);})]);}finally{clearTimeout(timer);}}await store.close();}});
 }

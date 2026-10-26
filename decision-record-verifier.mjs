@@ -33,7 +33,9 @@ function limits(p){allow(p,LIMIT_FIELDS,'policy limits');for(const v of Object.v
 function heuristicPolicy(p){keys(p,['weights','terminalPenalty','completionReward','terminalOrder','tieBreak'],'heuristic policy');keys(p.weights,['holes','aggregateHeight','maxHeight','bumpiness','lines'],'heuristic weights');for(const v of [...Object.values(p.weights),p.terminalPenalty,p.completionReward])if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>1e9)fail('heuristic numeric policy');if(typeof p.terminalOrder!=='string'||typeof p.tieBreak!=='string')fail('heuristic policy text');finiteJSON(p);}
 function policy(p){
  finiteJSON(p);if(size(p)>16384)fail('policy bytes');
- if(p?.kind==='externalDecisions'){
+ if(p?.version==='provider-policy-pilot-1'){
+  pilotPolicy(p);
+ }else if(p?.kind==='externalDecisions'){
   keys(p,['version','kind','provider','requestedModel','observedModel','transport','endpoint','protocol','assistance','visiblePreview','externalSearch','policyDigest','limits','actualCostUSD'],'external policy');
   if(p.version!=='provider-policy-1'||p.provider!=='OpenAI'||p.requestedModel!=='gpt-6-luna'||!['http-fixture','live'].includes(p.transport)||p.endpoint!=='https://api.openai.com/v1/decisions'||p.protocol!=='decisions-http-1'||p.assistance!=='canonical-afterstates-v1'||p.visiblePreview!==5||p.externalSearch!==false||!/^[a-f0-9]{64}$/.test(p.policyDigest??''))fail('external policy');limits(p.limits);
  }else if(p?.kind==='human'){
@@ -44,8 +46,26 @@ function policy(p){
   keys(p,['version','kind','name','fixture'],'mock policy');if(p.version!=='provider-policy-1')fail('mock policy version');keys(p.fixture,['mode','policyVersion','policy','liveEnabled','mockMode','delayMs'],'mock fixture');heuristicPolicy(p.fixture.policy);if(p.fixture.liveEnabled!==false||p.fixture.mode!=='offline-mock'||!['delay','error','stale','invalid','never'].includes(p.fixture.mockMode))fail('mock fixture');integer(p.fixture.delayMs,0,60000,'mock delay');
  }else fail('unsupported policy kind');
 }
-function accounting(a){if(a===null)return;if(Array.isArray(a)){if(a.length>2)fail('accounting lanes');a.forEach(accounting);return;}allow(a,ACCOUNT_FIELDS,'accounting');finiteJSON(a);if(a.limits)limits(a.limits);}
+const PILOT_LIMITS={maxAttempts:3,maxRuns:1,maxEpochs:1,maxPlacements:3,maxConcurrentUpstream:1,windowMs:60000,timeoutMs:1500,retryLimit:0,fallback:'none'};
+const PILOT_SPEND={configuredProjectLimitUSD:1,enforcementDelayOvershoot:'unquantified',riskAccepted:true};
+function pilotPolicy(p){
+ keys(p,['version','kind','provider','requestedModel','observedModel','transport','endpoint','protocol','assistance','visiblePreview','externalSearch','policyDigest','qualificationKind','accountingMode','limits','spendControl','actualCostUSD'],'pilot policy');
+ if(p.kind!=='externalDecisions'||p.provider!=='OpenAI'||p.requestedModel!=='gpt-6-luna'||p.observedModel!==null||p.transport!=='project-limit-pilot'||p.endpoint!=='https://api.openai.com/v1/decisions'||p.protocol!=='decisions-http-1'||p.assistance!=='canonical-afterstates-v1'||p.visiblePreview!==5||p.externalSearch!==false||!/^[a-f0-9]{64}$/.test(p.policyDigest)||p.qualificationKind!=='owner-risk-accepted-decisions-pilot-1'||p.accountingMode!=='project-hard-limit-delay-risk'||p.actualCostUSD!==null)fail('pilot policy contract');eq(p.limits,PILOT_LIMITS,'pilot limits');eq(p.spendControl,PILOT_SPEND,'pilot spend control');
+}
+function pilotAccounting(a){
+ keys(a,['version','mode','provider','requestedModel','observedModel','policyDigest','accountingMode','spendControl','attempts','completedResponses','placements','uncertain','remainingAttempts','reservedInputTokens','estimatedReservationMicros','actualExternalCalls','actualCostUSD','interrupted','terminal','closed','expiresAt'],'pilot accounting');
+ if(a.mode!=='project-limit-pilot'||a.provider!=='OpenAI'||a.requestedModel!=='gpt-6-luna'||a.accountingMode!=='project-hard-limit-delay-risk'||!/^[a-f0-9]{64}$/.test(a.policyDigest)||a.reservedInputTokens!==null||a.estimatedReservationMicros!==null||a.actualExternalCalls!==null||a.actualCostUSD!==null||!['interrupted','terminal','closed'].every(k=>typeof a[k]==='boolean'))fail('pilot accounting contract');
+ eq(a.spendControl,PILOT_SPEND,'pilot accounting spend');for(const k of ['attempts','completedResponses','placements','uncertain','remainingAttempts'])integer(a[k],0,3,'pilot accounting count');if(a.remainingAttempts!==3-a.attempts||a.completedResponses+a.uncertain>a.attempts||a.placements>a.completedResponses)fail('pilot accounting counts');integer(a.expiresAt,1,Number.MAX_SAFE_INTEGER,'pilot expiry');finiteJSON(a);
+}
+function accounting(a){if(a===null)return;if(Array.isArray(a)){if(a.length>2)fail('accounting lanes');a.forEach(accounting);return;}if(a.version==='decision-pilot-accounting-1'){pilotAccounting(a);return;}allow(a,ACCOUNT_FIELDS,'accounting');finiteJSON(a);if(a.limits)limits(a.limits);}
+function pilotReceipt(r,i,p){
+ keys(r,[...RECEIPT_FIELDS,'accountingMode'],'pilot receipt');finiteJSON(r);if(size(r)>4096||r.version!=='decision-pilot-receipt-1'||p.version!=='provider-policy-pilot-1'||r.provider!=='OpenAI'||r.requestedModel!==p.requestedModel||r.mode!==p.transport||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId||r.accountingMode!=='project-hard-limit-delay-risk'||r.actualCostUSD!==null||r.actualExternalCalls!==null||r.reservedInputTokens!==null||r.estimatedReservationMicros!==null||r.epoch!==0||r.attempts!==1||r.completedResponses!==1||r.completions!==1||r.placements!==1)fail('pilot receipt binding');
+ keys(r.remainingAllowance,['attempts'],'pilot remaining allowance');integer(r.remainingAllowance.attempts,0,2,'pilot remaining attempts');if(!Number.isFinite(r.requestLatencyMs)||r.requestLatencyMs<0||r.requestLatencyMs>1500)fail('pilot latency');
+ if(!r.usage||!['input_tokens','output_tokens','total_tokens'].every(k=>Number.isSafeInteger(r.usage[k])&&r.usage[k]>=0)||r.usage.total_tokens!==r.usage.input_tokens+r.usage.output_tokens)fail('pilot usage required');
+ allow(r.usage,['input_tokens','output_tokens','total_tokens','cached_input_tokens','cache_read_input_tokens','cache_write_input_tokens','input_tokens_details'],'pilot usage');for(const [k,v]of Object.entries(r.usage)){if(k==='input_tokens_details'){allow(v,['cached_tokens','cache_write_tokens'],'pilot cache detail');for(const n of Object.values(v))integer(n,0,r.usage.input_tokens,'pilot cache tokens');}else integer(v,0,['input_tokens','output_tokens','total_tokens'].includes(k)?Number.MAX_SAFE_INTEGER:r.usage.input_tokens,'pilot tokens');}
+}
 function receipt(r,i,p){
+ if(p.version==='provider-policy-pilot-1'){pilotReceipt(r,i,p);return;}
  if(r===null){if(p.kind==='externalDecisions')fail('missing compact receipt');return;}
  keys(r,RECEIPT_FIELDS,'receipt');finiteJSON(r);if(size(r)>4096||r.version!=='decision-receipt-2'||r.provider!=='OpenAI'||r.requestedModel!==p.requestedModel||r.mode!==p.transport||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId)fail('receipt binding');
  allow(r.remainingAllowance,['attempts','reservedInputTokens','estimatedReservationMicros'],'receipt allowance');
@@ -66,7 +86,7 @@ export function verifyDecisionUIRecord(input){
  if(!Array.isArray(r.lanes)||r.lanes.length!==limit.lanes||!Array.isArray(r.events)||r.events.length>limit.events||!Array.isArray(r.finals)||r.finals.length!==limit.lanes)fail('lane/event/final bounds');
  const lanes=new Map();
  for(let n=0;n<r.lanes.length;n++){
-  const l=r.lanes[n];keys(l,['id','kind','initial','policy'],'lane');if(l.id!==n||l.kind!==(r.mode==='versus'&&n===0?'human':'computer'))fail('lane identity/kind');policy(l.policy);if((l.kind==='human')!==(l.policy.kind==='human'))fail('lane policy kind');
+  const l=r.lanes[n];keys(l,['id','kind','initial','policy'],'lane');if(l.id!==n||l.kind!==(r.mode==='versus'&&n===0?'human':'computer'))fail('lane identity/kind');policy(l.policy);if(l.policy.version==='provider-policy-pilot-1'&&(r.mode!=='solo'||r.pieceCap!==3))fail('pilot recording scope');if((l.kind==='human')!==(l.policy.kind==='human'))fail('lane policy kind');
   keys(l.initial,['observation','pieces','status'],'initial');observation(l.initial.observation);integer(l.initial.pieces,0,r.pieceCap,'initial pieces');if(!['ready','running','paused','stopped','over','won','error'].includes(l.initial.status))fail('initial status');
   // Production exporters begin at an empty ready board; arbitrary mid-game fixtures cannot claim a full run.
   const o=l.initial.observation;if(o.status!=='ready'||o.active!==null||o.score!==0||o.lines!==0||o.level!==1||o.gravityElapsedMs!==0||o.revision!==0||l.initial.pieces!==0||l.initial.status!=='ready'||o.board.some(row=>row!=='.'.repeat(10)))fail('initial must be canonical empty ready state');
@@ -94,7 +114,7 @@ export function verifyDecisionUIRecord(input){
    else{if(i.kind==='resume')fail('computer lifecycle');if(i.kind==='start'&&l.recovery)fail('recovery requires reset');status=i.kind==='start'?'running':l.recovery?'error':i.kind==='stop'?'stopped':'paused';}
   }else if(i.kind==='error'||i.kind==='cancel'){
    if(human||s.status!=='playing')fail('failed request state');keys(i,i.kind==='error'?['kind','requestId','revision','code','recoveryRequired']:['kind','control','requestId','revision'],'failed request');request(l,i,before);
-   if(i.kind==='error'){if(i.code!=='decision-failed'||typeof i.recoveryRequired!=='boolean'||(i.recoveryRequired&&l.policy.kind!=='externalDecisions'))fail('error code/recovery');l.recovery=i.recoveryRequired;status='error';}else{if(!['paused','stopped'].includes(i.control))fail('cancel control');l.recovery=l.policy.kind==='externalDecisions';status=l.recovery?'error':i.control;}l.attempt=i.kind;
+   if(i.kind==='error'){if(i.code!=='decision-failed'||typeof i.recoveryRequired!=='boolean'||(i.recoveryRequired&&l.policy.kind!=='externalDecisions'))fail('error code/recovery');l.recovery=i.recoveryRequired;status='error';}else{if(!['paused','stopped'].includes(i.control))fail('cancel control');l.recovery=l.policy.kind==='externalDecisions'&&l.policy.version!=='provider-policy-pilot-1';status=l.recovery?'error':i.control;}l.attempt=i.kind;
   }else fail('unknown input kind');
   eq(e.pieces,pieces,`event ${index} pieces`);eq(e.status,status,`event ${index} status`);eq(e.observation,publicObservation(s,{sessionId:before.sessionId,revision:rev}),`event ${index} observation`);
   l.last=e;l.s={...s,queue:[...e.observation.next],nextType:e.observation.next[0]};
