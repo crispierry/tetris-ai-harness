@@ -1,3 +1,4 @@
+import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
 import { providerFor } from './comparison.mjs';
 import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail, formatNumber } from './marathon.mjs';
@@ -20,6 +21,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     if($('v-provider'))$('v-provider').disabled=view.frameCount>0;
     if($('v-1-heading'))text('v-1-heading',view.lanes[1].player.name);
     const unavailable=$('v-provider')?.value==='openai' && pairing?.session.state.state!=='connected';
+    text('v-1-provenance', providerProvenance(view.policies?.[1], { recorded: view.mode === 'replay', pending: unavailable && (pairing?.session.state.message ?? true) }));
     const replay = view.mode === 'replay', finished = view.state === 'completed', archiveBlocked = !replay && !!view.archiveError;
     $('v-start').disabled = finished || view.running || view.busy || view.playback || archiveBlocked || unavailable;
     text('v-start', replay ? 'Play saved frames' : view.state === 'ready' ? 'Start' : 'Resume');

@@ -30,12 +30,23 @@ for(const mode of ['comparison','versus','solo'])for(const action of mode==='com
  let c,mounted;const prefix=mode==='comparison'?'c':mode==='versus'?'v':'h';const win={addEventListener(){},requestAnimationFrame(){return 1;},cancelAnimationFrame(){}};
  try{
   if(mode==='comparison'){c=mountComparison(doc,{onExport:json=>exported=JSON.parse(json)});$('c-left').value='local';$('c-right').value='openai';$('c-pieceCap').value='2';await $('c-right').trigger('change');}else{const options={window:win,onExport:json=>exported=JSON.parse(json)};$(prefix+'-provider').value='local';mounted=mode==='solo'?mountHarness(doc,options):mountVersus(doc,options);$(prefix+'-provider').value='openai';await $(prefix+'-provider').trigger('change');}
-  await $('decision-pairing').children[1].trigger('click');if(mode!=='comparison')c=mode==='solo'?mounted.controller:mounted.runner;await $(prefix+'-start').trigger('click');await until(()=>attempts===1);
+  const provenance=()=>$(mode==='comparison'?'c-1-tier':mode==='versus'?'v-1-provenance':'h-provenance').textContent;
+  assert.match(provenance(),/Not configured/);assert.doesNotMatch(provenance(),/Independent local choices/);
+  await $('decision-pairing').children[1].trigger('click');
+  assert.match(provenance(),/^Offline HTTP fixture via local server · No external provider calls/);
+  assert.match(provenance(),/Current \+ next five/);
+  if(mode!=='comparison')c=mode==='solo'?mounted.controller:mounted.runner;await $(prefix+'-start').trigger('click');await until(()=>attempts===1);
   const accounting=record=>mode==='comparison'?record.metadata.accounting[0]:record.metadata.accounting;const exportRun=()=>mode==='solo'?mounted.exportRun():c.exportRun();const pending=accounting(JSON.parse(exportRun()));assert.notEqual(pending.freshness,'current');assert.equal(pending.attempts,null);
   if(action==='stop')await $('c-stop').trigger('click');if(action==='focus')events.blur();
   const facts=$('decision-pairing').children[5].children[1];await until(()=>/1 reserved attempts/.test(facts.textContent));
   assert.match(facts.textContent,/allowance: 7/);assert.equal(choices,1);assert.ok(statusReads>=1);assert.equal(mode==='solo'?c.view.lastDecision:c.view.lanes[1].lastDecision,null);
   await $(prefix+'-export').trigger('click');assert.equal(accounting(exported).freshness,'current');assert.equal(accounting(exported).attempts,1);assert.equal(accounting(exported).remainingAttempts,7);
+  await $(prefix+'-replay').trigger('click');await $(prefix+'-pause').trigger('click');
+  assert.match(provenance(),/^Recorded · Offline HTTP fixture via local server/);
+  assert.equal(choices,1);
+  await $(prefix+'-reset').trigger('click');
+  assert.match(provenance(),/^Offline HTTP fixture via local server/);assert.doesNotMatch(provenance(),/^Recorded/);
+  assert.equal(choices,1);
  }finally{if(mounted)mounted.dispose();else c?.dispose();await events.pagehide?.();globalThis.fetch=oldFetch;if(oldAdd)globalThis.addEventListener=oldAdd;else delete globalThis.addEventListener;}
 });
 test('late authenticated accounting read cannot overwrite Reset or close; unavailable accounting is explicit',async()=>{

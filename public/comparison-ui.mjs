@@ -1,3 +1,4 @@
+import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
 import { providerFor } from './comparison.mjs';
 import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail, formatNumber } from './marathon.mjs';
@@ -36,7 +37,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       if(view.mode!=='replay')pairing?.observe(lane.lastDecision?.receipt);
       const prefix = `c-${index}-`, obs = lane.observation;
       text(prefix + 'heading', `${index ? 'Right' : 'Left'} · ${lane.player.name}`);
-      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${lane.player.kind==='remote'?(lane.policy.transport==='http-fixture'?'Offline fixture connected — No external calls':'Live OpenAI connected'):lane.player.kind === 'mock' ? 'Offline test fixture' : 'Local algorithm'} · ${lane.assistance}`);
+      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: index === 1 && $('c-right').value === 'openai' && pairing?.session.state.state !== 'connected' })} · ${lane.assistance}`);
       for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
@@ -77,7 +78,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   const settings = () => Object.fromEntries(SETTINGS.map(key => [key, ['left', 'right'].includes(key) ? $('c-' + key).value : Number($('c-' + key).value)]));
   const act = fn => async () => {
     try { $('c-error').hidden = true; text('c-error', ''); await fn(); }
-    catch (error) { $('c-error').hidden = false; text('c-error', error.message); }
+    catch (error) { $('c-error').hidden = false; text('c-error', error.message); render(comparison.view); }
   };
   SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => {pairing?.setEnabled(settings().right==='openai');for(const field of ['nodeCap','timeMs'])$('c-'+field).disabled=settings().right==='openai';comparison.configure(settings());})));
   pairing?.setEnabled(false);

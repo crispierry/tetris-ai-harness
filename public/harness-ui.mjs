@@ -1,3 +1,4 @@
+import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
 import { providerPolicy } from './provider-policy.mjs';
 import { decisionRecord } from './decision-record.mjs';
@@ -34,6 +35,7 @@ function render(view) {
  });
  if(['over','won','error'].includes(view.status)&&previousStatus!==view.status){auto=false;loopToken++;clearTimeout(timer);announce(`Computer: ${STATUS[view.status]}. ${view.status==='won'?outcomeDetail('won',obs):view.error??`${format(view.pieces)} pieces, ${format(obs.lines)} lines.`}`);}
  const unavailable=$('h-provider').value==='openai' && pairing?.session.state.state!=='connected';
+ $('h-provenance').textContent=providerProvenance(policy??providerPolicy(provider),{recorded:replay,pending:unavailable && (pairing?.session.state.message ?? true)});
  const terminal=(!replay&&['over','won'].includes(view.status))||(!replay&&(view.pieces>=1000||archiveError))||(!replay&&view.recoveryRequired)||unavailable;$('h-start').textContent=replay?'Play saved frames':['paused','stopped'].includes(view.status)?'Resume':'Start';$('h-start').disabled=auto||view.busy||terminal||(replay&&replayIndex>=frames.length);$('h-step').disabled=auto||view.busy||terminal||(replay&&replayIndex>=frames.length);
  $('h-pause').disabled=terminal||(!auto&&!view.busy);$('h-stop').disabled=view.status==='ready'||view.status==='stopped'||terminal;$('h-provider').disabled=locked;
  if(!replay&&obs.status!=='won'&&(view.pieces>=1000||archiveError))$('h-outcome').textContent=archiveError??'Placement safety limit reached. The 300-line goal was not reached. Reset to play again.';
