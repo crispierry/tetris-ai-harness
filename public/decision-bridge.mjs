@@ -2,10 +2,17 @@ import { compactReceipt } from './provider-policy.mjs';
 // Node-free provider. Admission exists only in closure memory; no automatic enrollment.
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const immutable = v => { if (v && typeof v === 'object') { Object.values(v).forEach(immutable); Object.freeze(v); } return v; };
-export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch } = {}) {
+export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAccounting = () => {} } = {}) {
   if (!grant || !/^[a-f0-9]{64}$/.test(grant.capability ?? '') || !Number.isInteger(grant.epoch) || typeof grant.controllerSessionBase !== 'string' || typeof fetchImpl !== 'function') fail('configuration');
   const capability = grant.capability, base = grant.controllerSessionBase;
   let epoch = grant.epoch, active = null, serial = 0, receipt = null, receiptSerial = 0, closed=false, status=grant.admission ?? null, requiresReset=false;
+  const statusReads=new Set(),statusAborts=new Set();
+  let accountingRevision=0,statusSerial=0,freshness=status?'current':'unknown';
+  const accounting=()=>freshness==='current'?immutable({...status,freshness:'current'}):immutable({freshness,attempts:null,remainingAttempts:null,reason:'Current accounting is unknown until authenticated reconciliation settles.'});
+  const notify=()=>{try{onAccounting(accounting());}catch{}};
+  const invalidate=()=>{accountingRevision++;for(const abort of statusAborts)abort.abort();freshness='stale';notify();};
+  function refreshStatus(){const operation=readStatus();statusReads.add(operation);operation.then(()=>statusReads.delete(operation),()=>statusReads.delete(operation));return operation;}
+  async function readStatus(){if(closed)fail('cancelled');if(active)fail('accounting_pending');const revision=accountingRevision,serial=++statusSerial,abort=new AbortController();statusAborts.add(abort);try{const value=immutable(await post('/decision/control',{action:'runStatus'},abort.signal));if(closed||active||revision!==accountingRevision||serial!==statusSerial)fail('accounting_stale');status=value;freshness='current';notify();return status;}catch(error){if(!closed&&revision===accountingRevision&&serial===statusSerial){freshness='unknown';notify();}throw error;}finally{statusAborts.delete(abort);}}
   async function post(route,body,signal) {
     const response = await fetchImpl(route,{method:'POST',headers:{'content-type':'application/json','x-decision-capability':capability},body:JSON.stringify(body),signal,redirect:'error',credentials:'same-origin'});
     let bytes=0, chunks=[];
@@ -16,15 +23,16 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch } = {
   }
   return Object.freeze({name:'OpenAI Decisions (server bridge)',kind:'remote',version:'decisions-http-1',
     capabilities: immutable({maxCandidates:255,movementMode:'reachable-paused-gravity-v1',assistance:'canonical-afterstates-v1'}),
-    get runMetadata() { return immutable({mode:status?.mode ?? 'unverified',liveEnabled:status?.mode==='live',admission:status,actualCostUSD:status?.actualCostUSD ?? null}); },
+    get runMetadata() { return immutable({mode:status?.mode ?? 'unverified',liveEnabled:status?.mode==='live',admission:status,accounting:accounting(),actualCostUSD:status?.actualCostUSD ?? null}); },
     get controllerBinding() {return immutable({sessionId:base,gameEpoch:grant.epoch});},
-    async status() {if(closed)fail('cancelled');status=immutable(await post('/decision/control',{action:'runStatus'}));return status;},
-    async close() {closed=true;active=null;receipt=null;return post('/decision/control',{action:'close'});},
+    status:refreshStatus,
+    invalidateAccounting:invalidate,
+    async close() {closed=true;active=null;receipt=null;invalidate();const result=await post('/decision/control',{action:'close'});await Promise.allSettled([...statusReads]);return result;},
     get requiresReset(){return requiresReset||active?.dispatched===true;},
     get lastReceipt() { return receipt; },
     async decide(packet,{signal}={}) {
       if(closed)fail('cancelled');
-      receipt=null;
+      receipt=null;invalidate();
       const suffix = packet?.observation?.sessionId?.slice(base.length+1), nextEpoch=Number(suffix);
       if (packet?.observation?.sessionId !== `${base}-${nextEpoch}` || !Number.isSafeInteger(nextEpoch) || nextEpoch < epoch || nextEpoch < 0 || nextEpoch >= 100) fail('epoch');
       if (active && !active.signal?.aborted) fail('overlap');
@@ -52,7 +60,7 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch } = {
         if (job.id >= receiptSerial) { receipt=compactReceipt(result.receipt); receiptSerial=job.id; }
         return immutable(choice);
         }catch(error){if(active===job)requiresReset=true;throw error;}
-      } finally { if (active===job) active=null; }
+      } finally { if (active===job){active=null;invalidate();if(grant.admission)void refreshStatus().catch(()=>{});} }
     },
   });
 }

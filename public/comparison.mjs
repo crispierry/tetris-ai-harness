@@ -229,7 +229,7 @@ export class Comparison {
       meaning: 'Descriptive player/assistance comparison. Capped/error runs are censored; no winner or model-quality inference.' });
   }
   exportRun() {
-    if(this.#config.right==='openai')return decisionRecord({mode:'comparison',policies:this.#policies,frames:this.#frames,finals:this.#lanes.map(l=>({score:l.controller.view.observation.score,lines:l.controller.view.observation.lines,pieces:l.controller.view.pieces})),reasons:this.#lanes.map(l=>l.outcome?.reason??l.controller.view.status),metadata:{config:{left:this.#config.left,right:this.#config.right,samples:this.#config.samples,pieceCap:this.#config.pieceCap,paceMs:this.#config.paceMs},archiveError:this.#archiveError,accounting:this.#lanes.filter(l=>l.provider.kind==='remote').map(l=>l.provider.runMetadata.admission)}});
+    if(this.#config.right==='openai')return decisionRecord({mode:'comparison',policies:this.#policies,frames:this.#frames,finals:this.#lanes.map(l=>({score:l.controller.view.observation.score,lines:l.controller.view.observation.lines,pieces:l.controller.view.pieces})),reasons:this.#lanes.map(l=>l.outcome?.reason??l.controller.view.status),metadata:{config:{left:this.#config.left,right:this.#config.right,samples:this.#config.samples,pieceCap:this.#config.pieceCap,paceMs:this.#config.paceMs},archiveError:this.#archiveError,accounting:this.#lanes.filter(l=>l.provider.kind==='remote').map(l=>l.provider.runMetadata.accounting)}});
     const record = freeze({ version: COMPARISON_VERSION, frameVersion: 1, rulesVersion: RULES.version, schemas: VERSIONS,
       config: this.#config, admission: {
         plannedPlacements: 2 * this.#config.samples * this.#config.pieceCap,

@@ -56,12 +56,12 @@ export class Controller {
   setProvider(provider) {
     if (this.#pending || this.#status === 'running') throw new Error('Pause before changing player');
     if (!provider || typeof provider.decide !== 'function' || typeof provider.name !== 'string' || !provider.name || !Number.isInteger(provider.capabilities?.maxCandidates) || provider.capabilities.maxCandidates < 1 || provider.capabilities.maxCandidates > 800 || provider.capabilities?.movementMode !== 'reachable-paused-gravity-v1' || provider.capabilities?.assistance !== 'canonical-afterstates-v1') throw new Error('Unsupported provider capability');
-    this.#provider = provider;
+    if(this.#provider!==provider)this.#provider?.invalidateAccounting?.();this.#provider = provider;
   }
-  #cancel(status) { const pending = this.#pending; this.#pending = null; pending?.abort.abort();if(pending && this.#provider.kind==='remote'){this.#recovery=true;this.#error='Cancelled — Reset required. Allowance is not refilled.';this.#last=null;} this.#status = isTerminal(this.#state.status) ? this.#state.status : this.#recovery?'error':status; this.#emit(); }
+  #cancel(status) { if(status==='stopped')this.#provider.invalidateAccounting?.();const pending = this.#pending; this.#pending = null; pending?.abort.abort();if(pending && this.#provider.kind==='remote'){this.#recovery=true;this.#error='Cancelled — Reset required. Allowance is not refilled.';this.#last=null;} this.#status = isTerminal(this.#state.status) ? this.#state.status : this.#recovery?'error':status; this.#emit(); }
   pause() { this.#cancel('paused'); }
   stop() { this.#cancel('stopped'); }
-  reset() { this.#cancel('stopped'); this.#epoch++; this.#recovery=false; this.#revision = 0; this.#state = createGame(this.#seed); this.#pieces = 0; this.#last = null; this.#error = null; this.#status = 'ready'; this.#emit(); }
+  reset() { this.#provider.invalidateAccounting?.();this.#cancel('stopped'); this.#epoch++; this.#recovery=false; this.#revision = 0; this.#state = createGame(this.#seed); this.#pieces = 0; this.#last = null; this.#error = null; this.#status = 'ready'; this.#emit(); }
   start() {if(this.#recovery)return; if (this.#pending) throw new Error('Decision already in progress'); if (isTerminal(this.#state.status)) return; this.#error = null; this.#status = 'running'; this.#emit(); }
   async step({ continueRunning = false } = {}) {
     if(this.#recovery){this.#emit();return null;}
@@ -70,7 +70,7 @@ export class Controller {
     if (this.#state.status === 'ready') { this.#state = start(this.#state); this.#revision++; }
     const binding = this.#binding, current = this.#state, abort = new AbortController();
     const job = { abort, requestId: `${binding.sessionId}:${binding.revision}:${++this.#serial}` };
-    this.#last=null;this.#pending = job; this.#status = 'choosing'; this.#error = null; this.#emit();
+    this.#provider.invalidateAccounting?.();this.#last=null;this.#pending = job; this.#status = 'choosing'; this.#error = null; this.#emit();
     let timer, abortListener;
     try {
       const candidates = enumerate(current, binding);

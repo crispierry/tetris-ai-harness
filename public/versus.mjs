@@ -204,7 +204,7 @@ export class HumanVersus {
     if (this.#nextReplay()) this.#timer = setTimeout(() => this.#playReplay(epoch), this.#paceMs);
   }
   exportRun() {
-    if(this.#provider.kind==='remote')return decisionRecord({mode:'versus',policies:this.#policies(),frames:this.#frames,finals:[this.#humanView(),this.#aiView()].map(v=>({score:v.observation.score,lines:v.observation.lines,pieces:v.pieces})),reasons:[this.#humanOutcome?.reason??this.#humanView().status,this.#aiOutcome?.reason??this.#aiView().status],metadata:{archiveError:this.#archiveError,accounting:this.#provider.runMetadata.admission}});
+    if(this.#provider.kind==='remote')return decisionRecord({mode:'versus',policies:this.#policies(),frames:this.#frames,finals:[this.#humanView(),this.#aiView()].map(v=>({score:v.observation.score,lines:v.observation.lines,pieces:v.pieces})),reasons:[this.#humanOutcome?.reason??this.#humanView().status,this.#aiOutcome?.reason??this.#aiView().status],metadata:{archiveError:this.#archiveError,accounting:this.#provider.runMetadata.accounting}});
     const record = { version: VERSUS_VERSION, frameVersion: 1, rulesVersion: RULES.version,
       objective: RULES.objective, admission: { recording: versusRecordingAdmission(this.#pieceCap), plannedPlacements: 2 * this.#pieceCap,
         maximumAlgorithmDecisionWaitMs: this.#pieceCap * VERSUS_LIMITS.deadlineMs,
