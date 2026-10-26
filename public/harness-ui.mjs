@@ -29,7 +29,7 @@ function render(view) {
   tiles[y*RULES.width+x].className=`h-cell${type?` filled piece-${type}`:''}${falling?' active':''}`;
  }
  board.setAttribute('aria-label',`${RULES.width} columns by ${RULES.height} rows. ${obs.board.flat().filter(Boolean).length} locked cells. ${obs.active?`Falling ${obs.active.type} piece.`:'No falling piece.'}`);
- $('h-status').textContent=replay?'Saved visual replay':view.pieces>=1000&&obs.status!=='won'?'Capped':STATUS[view.status];$('player-heading').textContent=view.player.name;
+ $('h-status').textContent=replay?'Saved visual replay':view.pieces>=1000&&obs.status!=='won'?'Capped':STATUS[view.status];$('player-heading').textContent=!replay&&!!pairing&&$('h-provider').value==='openai'&&pairing.session.state.state!=='connected'?'OpenAI Decisions · Connect to request approval':view.player.name;
  for(const key of ['score','lines','level'])$('h-'+key).textContent=format(obs[key]);$('h-pieces').textContent=format(view.pieces);$('h-lines').textContent=linesProgress(obs.lines);$('h-level').textContent=levelProgress(obs.level);$('h-outcome').textContent=outcomeDetail(view.status,obs,view.error);
  $('h-next').replaceChildren();obs.next.forEach((type,index)=>{
   const mini=doc.createElement('div');mini.className=`h-mini piece-${type}`;mini.setAttribute('role','img');mini.setAttribute('aria-label',`Next ${index+1}: ${type}`);

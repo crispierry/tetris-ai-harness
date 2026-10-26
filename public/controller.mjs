@@ -62,6 +62,7 @@ export class Controller {
     if (!provider || typeof provider.decide !== 'function' || typeof provider.name !== 'string' || !provider.name || !Number.isInteger(provider.capabilities?.maxCandidates) || provider.capabilities.maxCandidates < 1 || provider.capabilities.maxCandidates > 800 || provider.capabilities?.movementMode !== 'reachable-paused-gravity-v1' || provider.capabilities?.assistance !== 'canonical-afterstates-v1') throw new Error('Unsupported provider capability');
     if(this.#provider!==provider)this.#provider?.invalidateAccounting?.();this.#provider = provider;
   }
+  #recoveryCopy(){return this.#provider.runMetadata?.mode==='project-limit-browser'?'See provider status before continuing. Allowance is not refilled.':'Reset required. Allowance is not refilled.';}
   #cancel(status,record=true) {
     this.#controlSerial++;
     const pending=this.#pending;
@@ -72,7 +73,7 @@ export class Controller {
     }
     if(record&&!isTerminal(this.#state.status))this.#record(pending?{kind:'cancel',control:status,requestId:pending.requestId,revision:this.#revision}:{kind:status==='stopped'?'stop':'pause'},{status:!this.#confirmationHold&&(this.#recovery||(pending&&this.#provider.kind==='remote'))?'error':status});
     if(status==='stopped')this.#provider.invalidateAccounting?.();this.#pending=null;pending?.abort.abort();
-    if(pending&&this.#provider.kind==='remote'){this.#recovery=true;this.#error='Cancelled — Reset required. Allowance is not refilled.';this.#last=null;}
+    if(pending&&this.#provider.kind==='remote'){this.#recovery=true;this.#error='Cancelled — '+this.#recoveryCopy();this.#last=null;}
     this.#status=isTerminal(this.#state.status)?this.#state.status:this.#recovery?'error':status;this.#emit();
   }
   pause() { this.#cancel('paused'); }
@@ -125,7 +126,7 @@ export class Controller {
         return null;
       }
       if (this.#pending !== job) return null;
-      if(!/Canonical recording capacity/.test(error.message))this.#record({kind:'error',requestId:job.requestId,revision:binding.revision,code:'decision-failed',recoveryRequired:this.#provider.kind==='remote'&&this.#provider.requiresReset===true},{status:'error'});this.#status = 'error';this.#recovery=this.#provider.kind==='remote' && this.#provider.requiresReset===true; this.#error = error.message+(this.#recovery?' — Reset required. Allowance is not refilled.':''); return null;
+      if(!/Canonical recording capacity/.test(error.message))this.#record({kind:'error',requestId:job.requestId,revision:binding.revision,code:'decision-failed',recoveryRequired:this.#provider.kind==='remote'&&this.#provider.requiresReset===true},{status:'error'});this.#status = 'error';this.#recovery=this.#provider.kind==='remote' && this.#provider.requiresReset===true; this.#error = error.message+(this.#recovery?' — '+this.#recoveryCopy():''); return null;
     } finally {
       clearTimeout(timer); if (abortListener) abort.signal.removeEventListener('abort', abortListener);
       abort.abort(job.committed?'placement-committed':undefined); if (this.#pending === job) this.#pending = null; this.#emit();

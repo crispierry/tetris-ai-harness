@@ -20,6 +20,7 @@ import {DEFAULT_CONFIG} from '../public/comparison.mjs';
 import {Comparison,providerFor} from '../public/comparison.mjs';
 import {HumanVersus} from '../public/versus.mjs';
 import {mountHarness} from '../public/harness-ui.mjs';
+import {mountVersus} from '../public/versus-ui.mjs';
 import {providerPolicy} from '../public/provider-policy.mjs';
 import {providerProvenance} from '../public/provider-provenance.mjs';
 import {browserStatus} from '../public/decision-session.mjs';
@@ -111,7 +112,27 @@ test('invalid receipt or journal capacity prevents commit and ACK',async t=>{
 test('solo Choosing retains Pause/Stop while paid controls are fenced; comparison pending selection is truthful',async t=>{
  let release,entered;const waiting=new Promise(r=>entered=r),f=await fixture(t,{httpServer:true,fetchImpl:upstream({hold:()=>new Promise(r=>{release=r;entered();})})}),oldFetch=globalThis.fetch,nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
  globalThis.fetch=async(route,o={})=>{const r=await oldFetch(f.origin+route,{...o,headers:{origin:f.origin,...o.headers}});if(route==='/decision/pair/register'&&r.ok){const x=await r.clone().json();await f.owner.command({action:'approve',challengeId:x.challengeId,...JSON.parse(o.body)});}return r;};
- const doc={getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},mounted=mountHarness(doc,{window:{addEventListener(){}}});try{$('h-provider').value='openai';$('h-provider').trigger('change');await $('decision-pairing').children[1].trigger('click');const step=$('h-step').trigger('click');await waiting;assert.equal($('h-pause').disabled,false);assert.equal($('h-stop').disabled,false);assert.equal($('h-start').disabled,true);assert.equal($('h-step').disabled,true);assert.equal($('h-reset').disabled,true);$('h-pause').trigger('click');release();await step;assert.equal(mounted.controller.view.pieces,0);}finally{release?.();mounted.dispose();globalThis.fetch=oldFetch;}
+ const doc={getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},mounted=mountHarness(doc,{window:{addEventListener(){}}});try{$('h-provider').value='openai';$('h-provider').trigger('change');assert.match($('player-heading').textContent,/OpenAI Decisions/);await $('decision-pairing').children[1].trigger('click');const step=$('h-step').trigger('click');await waiting;assert.equal($('h-pause').disabled,false);assert.equal($('h-stop').disabled,false);assert.equal($('h-start').disabled,true);assert.equal($('h-step').disabled,true);assert.equal($('h-reset').disabled,true);$('h-pause').trigger('click');release();await step;assert.equal(mounted.controller.view.pieces,0);}finally{release?.();mounted.dispose();globalThis.fetch=oldFetch;}
  for(const [file,prefix]of [['harness.html','h'],['comparison.html','c'],['versus.html','v']]){const html=await readFile(new URL('../public/'+file,import.meta.url),'utf8');assert.equal((html.match(/id="decision-budget-risk"/g)??[]).length,1);assert(html.indexOf('id="decision-budget-risk"')<html.indexOf(`id="${prefix}-start"`));}
  const n=new Map(),get=id=>{if(!n.has(id))n.set(id,new Element());return n.get(id);};for(const [k,v]of Object.entries(DEFAULT_CONFIG))get('c-'+k).value=String(v);const comparison=mountComparison({getElementById:get,createElement:()=>new Element(),addEventListener(){},hidden:false});try{get('c-right').value='openai';await get('c-right').trigger('change');assert.equal(get('c-start').disabled,true);assert.equal(get('c-step').disabled,true);assert.match(get('c-1-heading').textContent,/OpenAI Decisions/);assert.doesNotMatch(get('c-1-heading').textContent,/Lookahead/);assert.equal(get('c-error').hidden,true);}finally{comparison.dispose();}
+});
+
+
+test('versus pending OpenAI does not configure an unavailable provider and successful pairing clears the fulfilled message',async t=>{
+ const oldAdd=globalThis.addEventListener,pagehide=[];globalThis.addEventListener=(name,fn)=>{if(name==='pagehide')pagehide.push(fn);};
+ let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})}),oldFetch=globalThis.fetch,nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
+ globalThis.fetch=async(route,o={})=>{const response=await oldFetch(f.origin+route,{...o,headers:{origin:f.origin,...o.headers}});if(route==='/decision/pair/register'&&response.ok){const challenge=await response.clone().json();await f.owner.command({action:'approve',challengeId:challenge.challengeId,...JSON.parse(o.body)});}return response;};
+ $('v-provider').value='local';$('v-message').hidden=true;
+ const mounted=mountVersus({getElementById:$,createElement:()=>new Element(),addEventListener(){},hasFocus:()=>true,hidden:false},{window:{addEventListener(){},requestAnimationFrame(){return 1;},cancelAnimationFrame(){}}});
+ try{
+  $('v-provider').value='openai';await $('v-provider').trigger('change');assert.equal($('v-start').disabled,true);assert.equal($('v-step').disabled,true);assert.match($('v-1-heading').textContent,/OpenAI Decisions/);assert.doesNotMatch($('v-1-heading').textContent,/Local heuristic|Lookahead/);assert.equal($('v-message').hidden,true);assert.equal(calls,0);
+  $('v-message').hidden=false;$('v-message').textContent='unavailable';await $('decision-pairing').children[1].trigger('click');assert.equal($('v-message').hidden,true);assert.equal($('v-message').textContent,'');assert.equal(mounted.runner.view.state,'ready');assert.equal(mounted.runner.view.lanes[1].pieces,0);assert.equal(calls,0);assert.match($('v-1-provenance').textContent,/Owner-approved live OpenAI/);
+  await $('v-step').trigger('click');assert.equal(mounted.runner.view.lanes[1].pieces,1);assert.equal(calls,1);
+ }finally{mounted.dispose();await Promise.allSettled(pagehide.map(fn=>fn()));globalThis.fetch=oldFetch;if(oldAdd)globalThis.addEventListener=oldAdd;else delete globalThis.addEventListener;}
+});
+
+
+test('browser held recovery copy refers to authenticated provider status while strict fixture keeps Reset wording',async t=>{
+ const f=await fixture(t,{fetchImpl:upstream({status:429,errorCode:'project_spend_limit_exceeded'})}),c=new Controller({sessionId:'browser',provider:f.bridge});await c.step();assert.equal(c.view.recoveryRequired,true);assert.match(c.view.error,/See provider status before continuing/);assert.doesNotMatch(c.view.error,/Reset required/);assert.equal((await f.service.control(f.grant.capability,'runStatus')).ownerHold,true);
+ let entered,release;const waitForStart=new Promise(r=>entered=r),base=heuristic(),provider={...base,kind:'remote',requiresReset:true,runMetadata:{mode:'http-fixture'},decide:()=>new Promise(r=>{release=r;entered();})},strict=new Controller({provider});const pending=strict.step();await waitForStart;strict.pause();assert.match(strict.view.error,/Reset required/);release({});await pending;
 });
