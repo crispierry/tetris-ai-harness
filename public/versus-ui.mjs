@@ -1,10 +1,11 @@
+import {createPlacementPresenter} from './placement-motion.mjs';
 import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
 import { providerFor } from './comparison.mjs';
 import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail, formatNumber } from './marathon.mjs';
 import { HumanVersus } from './versus.mjs';
 import { GEOMETRY } from './harness.mjs';
-const STATUS = { ready: 'Ready', playing: 'Playing', running: 'Running', choosing: 'Choosing…', paused: 'Paused',
+const STATUS = { placing:'Placing…',ready: 'Ready', playing: 'Playing', running: 'Running', choosing: 'Choosing…', paused: 'Paused',
   stopped: 'Stopped', over: 'Game over', error: 'Error', completed: 'Run finished', won: MARATHON_COPY.complete, capped: 'Capped', replay: 'Saved replay' };
 const KEYS = { arrowleft: 'left', arrowright: 'right', arrowdown: 'down', arrowup: 'rotate', x: 'rotate', ' ': 'drop' };
 function download(json, doc) {
@@ -16,6 +17,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const $ = id => doc.getElementById(id), text = (id, value) => { $(id).textContent = value; };
   const surface = $('v-human-game');
   const tiles = [0, 1].map(i => Array.from({ length: 200 }, () => { const e = doc.createElement('span'); e.className = 'comparison-cell'; e.setAttribute('aria-hidden', 'true'); $(`v-${i}-board`).append(e); return e; }));
+  let visual=null;const presenter=createPlacementPresenter({window:win,onFrame:observation=>{visual=observation;render(runner.view);},onSettled:()=>{visual=null;}});
   let previousAnnouncement = '', previousLaneStates = [], lastFrame = null, frameHandle = null, disposed = false;
   function render(view) {
     $('v-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
@@ -35,8 +37,9 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     const progress = replay ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new choices`
       : `${STATUS[view.state]} · Human ${view.lanes[0].pieces}/${view.limits.pieces} pieces · Algorithm ${view.lanes[1].pieces}/${view.limits.pieces} pieces`;
     text('v-progress', progress + (view.limits.pieces < 1000 ? ' · Abbreviated run' : '')); text('v-recording', `${view.frameCount} saved frames${view.archiveError ? ' · Incomplete recording' : ''}. Reset clears this run.`);
-    view.lanes.forEach((lane, i) => {
-      if(view.mode!=='replay')pairing?.observe(lane.lastDecision?.receipt);
+    view.lanes.forEach((canonical, i) => {
+      if(view.mode!=='replay')pairing?.observe(canonical.lastDecision?.receipt);
+      const p=canonical.error||canonical.recoveryRequired?null:canonical.presentation,lane=p?{...p.before,status:p.phase==='placing'?'placing':'choosing',observation:visual??p.before.observation}:canonical;
       const prefix = `v-${i}-`, obs = lane.observation;
       text(prefix + 'status', STATUS[lane.status]);
       for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
@@ -71,7 +74,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     if (view.archiveError) { $('v-message').hidden = false; text('v-message', view.archiveError); }
     if (!view.running) lastFrame = null;
   }
-  const runner = runnerFactory({ onChange: render });
+  const runner = runnerFactory({ onChange: render,onPlacement:event=>presenter.play(event) });
   const select=$('v-provider');let pairing;
   const configure=()=>{if(select.value==='openai'&&pairing?.session.state.state!=='connected'){render(runner.view);return;}runner.configure(()=>select.value==='openai'?pairing.session.provider:providerFor(select.value,{nodeCap:4000,timeMs:500}));$('v-message').hidden=true;text('v-message','');};
   pairing=mountDecisionPairing(doc,{mode:'versus',lane:'algorithm',onAvailabilityChange:()=>render(runner.view),beforeConnect:()=>{if(select.value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if(select?.value==='openai'){try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}}}});
@@ -102,7 +105,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     } else lastFrame = null;
     frameHandle = win.requestAnimationFrame(frame);
   }
-  const dispose = () => { disposed = true; win.cancelAnimationFrame(frameHandle); runner.dispose(); };
+  const dispose = () => { disposed = true; win.cancelAnimationFrame(frameHandle);presenter.dispose(); runner.dispose(); };
   win.addEventListener('pagehide', dispose); render(runner.view); frameHandle = win.requestAnimationFrame(frame);
   return { runner, dispose };
 }

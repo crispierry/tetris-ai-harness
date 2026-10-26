@@ -1,3 +1,4 @@
+import {createPlacementPresenter} from './placement-motion.mjs';
 import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
 import { providerFor } from './comparison.mjs';
@@ -6,7 +7,7 @@ import { Comparison, DEFAULT_CONFIG, validateConfig } from './comparison.mjs';
 import { GEOMETRY } from './harness.mjs';
 import { briefing } from './briefing.mjs';
 
-const STATUS = { ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
+const STATUS = { placing:'Placing…',ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
   over: 'Game over', error: 'Error', completed: 'Run finished', won: MARATHON_COPY.complete, capped: 'Capped', replay: 'Saved replay' };
 const SETTINGS = Object.keys(DEFAULT_CONFIG);
 function download(json, doc) {
@@ -14,12 +15,13 @@ function download(json, doc) {
   const link = doc.createElement('a'); link.href = url; link.download = 'tetris-offline-comparison.json';
   doc.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export function mountComparison(doc, { comparisonFactory = options => new Comparison(options), onExport = json => download(json, doc) } = {}) {
+export function mountComparison(doc, { comparisonFactory = options => new Comparison(options), onExport = json => download(json, doc),window:win=globalThis } = {}) {
   const $ = id => doc.getElementById(id), text = (id, value) => { $(id).textContent = value; };
   const tiles = [0, 1].map(index => Array.from({ length: 200 }, () => {
     const tile = doc.createElement('span'); tile.className = 'comparison-cell'; tile.setAttribute('aria-hidden', 'true');
     $(`c-${index}-board`).append(tile); return tile;
   }));
+  const visual=new Map(),presenters=[0,1].map(lane=>createPlacementPresenter({window:win,onFrame:observation=>{visual.set(lane,observation);render(comparison.view);},onSettled:()=>{visual.delete(lane);}}));
   let previousAnnouncement = '', previousLaneStates = [];
   function render(view) {
     SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (view.config.right==='openai' && ['nodeCap','timeMs'].includes(key)); });
@@ -36,8 +38,9 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new decisions or live metrics`
       : `${STATUS[view.state]} · Sample ${view.sample} of ${view.config.samples} · ${view.summary.observedPairs} completed pairs`;
     text('c-progress', progress + (view.config.pieceCap < 1000 ? ' · Abbreviated run' : ''));
-    view.lanes.forEach((lane, index) => {
-      if(view.mode!=='replay')pairing?.observe(lane.lastDecision?.receipt);
+    view.lanes.forEach((canonical, index) => {
+      if(view.mode!=='replay')pairing?.observe(canonical.lastDecision?.receipt);
+      const p=canonical.error||canonical.recoveryRequired?null:canonical.presentation,lane=p?{...p.before,policy:canonical.policy,assistance:canonical.assistance,search:canonical.search,status:p.phase==='placing'?'placing':'choosing',observation:visual.get(index)??p.before.observation}:canonical;
       const prefix = `c-${index}-`, obs = lane.observation;
       text(prefix + 'heading',index===1&&pendingOpenAI?'Right · OpenAI Decisions · Connect to request approval':`${index ? 'Right' : 'Left'} · ${lane.player.name}`);
       text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: index === 1 && $('c-right').value === 'openai' && pairing?.session.state.state !== 'connected' })} · ${lane.assistance}`);
@@ -77,7 +80,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     if (view.archiveError) { $('c-error').hidden = false; text('c-error', view.archiveError); }
   }
   let pairing;
-  const comparison = comparisonFactory({ onChange: render,providerFactory:(key,config)=>key==='openai'?pairing.session.provider:providerFor(key,config) });
+  const comparison = comparisonFactory({ onChange: render,onPlacement:event=>presenters[event.lane].play(event),providerFactory:(key,config)=>key==='openai'?pairing.session.provider:providerFor(key,config) });
   pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
   const settings = () => Object.fromEntries(SETTINGS.map(key => [key, ['left', 'right'].includes(key) ? $('c-' + key).value : Number($('c-' + key).value)]));
   const act = fn => async () => {
