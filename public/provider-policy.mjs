@@ -17,3 +17,13 @@ export function compactReceipt(receipt) {
  if(receipt.version!=='decision-receipt-2' || Object.keys(receipt).some(k=>!allowed.includes(k)) || !['http-fixture','live'].includes(receipt.mode) || receipt.provider!=='OpenAI' || receipt.requestedModel!=='gpt-6-luna' || !Number.isFinite(receipt.requestLatencyMs) || receipt.requestLatencyMs<0 || !['attempts','completedResponses','completions','placements'].every(k=>Number.isInteger(receipt[k])&&receipt[k]>=0&&receipt[k]<=1) || size(receipt)>4096)throw new Error('Invalid compact receipt.');
  return freeze(JSON.parse(JSON.stringify(receipt)));
 }
+
+// Local lookahead receipts are public bounded search accounting, not Decisions receipts.
+export function localSearchReceipt(receipt) {
+ if(!receipt)return null;
+ const stats=['nodes','evaluatorCalls','rootsOffered','rootsCompleted','childrenEnumerated','leavesEvaluated','pruned','elapsedMs'];
+ if(typeof receipt.requestId!=='string' || receipt.requestId.length>200 || !receipt.search || Object.keys(receipt.search).some(k=>!stats.includes(k)) || Object.values(receipt.search).some(v=>!Number.isFinite(v)||v<0))throw new Error('Invalid local search receipt.');
+ const result={requestId:receipt.requestId,errorCode:receipt.errorCode,search:receipt.search,usage:null,actualCostUSD:null,provenance:'Local/mock leaf evaluations; no live model calls'};
+ if(size(result)>4096)throw new Error('Local search receipt exceeds recording limit.');
+ return freeze(JSON.parse(JSON.stringify(result)));
+}

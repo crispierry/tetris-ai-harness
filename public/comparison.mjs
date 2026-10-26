@@ -1,4 +1,4 @@
-import { providerPolicy, compactReceipt } from './provider-policy.mjs';
+import { providerPolicy, compactReceipt, localSearchReceipt } from './provider-policy.mjs';
 import { decisionRecord } from './decision-record.mjs';
 import { Controller, heuristic, mockProvider, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { createLookaheadProvider, LOOKAHEAD_VERSION } from './lookahead.mjs';
@@ -37,10 +37,10 @@ function compactObservation(o) {
     active: o.active ? { type: o.active.type, rotation: o.active.rotation, x: o.active.x, y: o.active.y, cells: o.active.cells.map(p => ({ x: p.x, y: p.y })) } : null,
     next: [...o.next], score: o.score, lines: o.lines, level: o.level, status: o.status, terminalReason: o.terminalReason };
 }
-function compactDecision(last, compactPath=false) {
+function compactDecision(last, compactPath=false, provider) {
   if (!last) return null;
   const c = last.candidate;
-  return { receipt:compactReceipt(last.receipt), latencyMs: last.latencyMs, candidate: { piece: c.piece, orientation: c.orientation, cells: c.cells,
+  return { receipt:provider.kind==='remote'?compactReceipt(last.receipt):provider.runMetadata?.search?localSearchReceipt(last.receipt):null, latencyMs: last.latencyMs, candidate: { piece: c.piece, orientation: c.orientation, cells: c.cells,
     bounds: c.bounds, path: compactPath?c.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''):c.path, pathEncoding:compactPath?'LRCDH-1':undefined, clearedRows: c.clearedRows, scoreDelta: c.scoreDelta, linesDelta: c.linesDelta,
     features: c.features, featureDeltas: c.featureDeltas } };
 }
@@ -116,7 +116,7 @@ export class Comparison {
       sample: this.#sample + 1, lane: index, player: copy(view.player), policy: lane.policy }));
     const frame = freeze(copy({ version: 1, sample: this.#sample + 1, lane: index, event, status: view.status,
       observation: compactObservation(view.observation), pieces: view.pieces, player: view.player, assistance: view.assistance,
-      error: view.error?.slice(0, 500) ?? null, outcome: view.outcome, decision: compactDecision(view.lastDecision,this.#config.right==='openai'), search: view.search, policyId }));
+      error: view.error?.slice(0, 500) ?? null, outcome: view.outcome, decision: compactDecision(view.lastDecision,this.#config.right==='openai',lane.provider), search: view.search, policyId }));
     const length = bytes(frame);
     if (this.#frames.length >= LIMITS.frames || this.#frameBytes + length > (this.#config.right==='openai'?16*1024*1024:LIMITS.exportBytes) - 131072) {
       this.#archiveError = 'Saved-frame capacity reached. Play stopped; existing frames and outcomes are retained.';

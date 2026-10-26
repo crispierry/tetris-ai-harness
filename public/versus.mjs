@@ -1,4 +1,4 @@
-import { providerPolicy, compactReceipt } from './provider-policy.mjs';
+import { providerPolicy, compactReceipt, localSearchReceipt } from './provider-policy.mjs';
 import { decisionRecord } from './decision-record.mjs';
 import { createGame, start, move, rotate, softDrop, hardDrop, tick, togglePause, DEFAULT_SEED, RULES } from './engine.mjs';
 import { Controller, heuristic, HEURISTIC_WEIGHTS } from './controller.mjs';
@@ -30,7 +30,7 @@ const size = value => new TextEncoder().encode(JSON.stringify(value)).length;
 const clone = value => JSON.parse(JSON.stringify(value));
 const snapshot = o => ({ board: o.board.map(row => row.map(c => c ?? '.').join('')), active: o.active,
   next: [...o.next], score: o.score, lines: o.lines, level: o.level, status: o.status, terminalReason: o.terminalReason });
-const decision = (last,compactPath=false) => last ? { receipt:compactReceipt(last.receipt), latencyMs: last.latencyMs, candidate: { piece: last.candidate.piece,
+const decision = (last,compactPath=false,provider) => last ? { receipt:provider.kind==='remote'?compactReceipt(last.receipt):provider.runMetadata?.search?localSearchReceipt(last.receipt):null, latencyMs: last.latencyMs, candidate: { piece: last.candidate.piece,
   orientation: last.candidate.orientation, cells: last.candidate.cells, path:compactPath?last.candidate.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''):last.candidate.path,pathEncoding:compactPath?'LRCDH-1':undefined,
   clearedRows: last.candidate.clearedRows, scoreDelta: last.candidate.scoreDelta, linesDelta: last.candidate.linesDelta,
   features: last.candidate.features, featureDeltas: last.candidate.featureDeltas } } : null;
@@ -100,7 +100,7 @@ export class HumanVersus {
     const v = lane === 0 ? this.#humanView() : this.#aiView();
     const frame = freeze(clone({ version: 1, lane, event, status: v.status, observation: snapshot(v.observation),
       pieces: v.pieces, player: v.player, outcome: v.outcome, error: v.error?.slice(0, 500) ?? null,
-      lastDecision: decision(v.lastDecision,this.#provider.kind==='remote'), policyIndex: lane }));
+      lastDecision: decision(v.lastDecision,this.#provider.kind==='remote',this.#provider), policyIndex: lane }));
     const bytes = size(frame);
     if (this.#frames.length >= VERSUS_LIMITS.frames || this.#bytes + bytes > VERSUS_LIMITS.exportBytes - VERSUS_LIMITS.metadataReserveBytes) { this.#haltArchive(); return; }
     this.#frames.push(frame); this.#bytes += bytes;
