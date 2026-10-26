@@ -12,12 +12,33 @@ const startup = decisionStartupMode(process.argv.slice(2));
 const identity = launchIdentity(process.env, process.pid);
 // Explicit fixture-only OS-owner bootstrap. Provider key presence is never inspected.
 let decisions=createDecisionService(), owner=null, detachOwner=null;
+let server=null, shutdownWork;
+async function shutdown() {
+  if (shutdownWork) return shutdownWork;
+  shutdownWork = (async () => {
+    try {
+      await detachOwner?.();
+      await owner?.close();
+      await decisions.close();
+      server?.closeAllConnections();
+      if (server?.listening) await new Promise(resolve => server.close(resolve));
+      process.stdin.pause();
+    } catch {
+      process.stderr.write('decision_shutdown_drain_failed\n');
+      process.exitCode=1;
+    }
+  })();
+  return shutdownWork;
+}
+try {
 if(startup.mode === 'fixture') {
   const directory=process.env.BOB_DECISION_FIXTURE_LEDGER;
   const policy={maxAttempts:1000,maxInputTokens:1049600000,maxEstimatedMicros:1000000,expiresAt:Number(process.env.BOB_DECISION_FIXTURE_EXPIRES),maxRuns:8,maxEpochs:100,maxPlacements:1000,timeoutMs:1500,reservationTokens:1049600,reservationMicros:1000};
   const store=await openDecisionStore({directory,lineage:'p8-020-offline-fixture',policy,enroll:process.argv.includes('--enroll-decision-fixture')});
   const transport=Object.assign(async request=>{const ids=request.body.questions[0].choices.map(c=>c.value);return {status:200,body:{model:'gpt-6-luna',answers:[{name:'placement',type:'choice',choice:ids[0],confidence:1,probabilities:ids.map((value,i)=>({value,probability:i?0:1}))}]}};},{mode:'fixture'});
-  decisions=createDecisionService({enabled:true,store,policy,transport});owner=createDecisionOwner({service:decisions});
+  try { decisions=createDecisionService({enabled:true,store,policy,transport}); }
+  catch(error) { await store.close(); throw error; }
+  owner=createDecisionOwner({service:decisions});
   detachOwner=attachOwnerInput(process.stdin,owner,value=>process.stdout.write(JSON.stringify(value)+'\n'));
 }
 if (startup.mode === 'live') {
@@ -39,7 +60,7 @@ async function asset(relative) {
   }
   return readFile(current);
 }
-const server=http.createServer(async (request, response) => {
+server=http.createServer(async (request, response) => {
   response.setHeader('cache-control', 'no-store');
   response.setHeader('x-content-type-options', 'nosniff');
   response.setHeader('content-security-policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
@@ -53,8 +74,17 @@ const server=http.createServer(async (request, response) => {
   if (!mime) { response.writeHead(404); response.end(); return; }
   try { const bytes = await asset(relative); response.setHeader('content-type', mime); response.end(request.method === 'HEAD' ? undefined : bytes); }
   catch { response.writeHead(404); response.end(); }
-}).listen(Number(process.env.BOB_LOCAL_PORT), '127.0.0.1');
-
-let stopping=false;
-async function shutdown(){if(stopping)return;stopping=true;try{await detachOwner?.();await owner?.close();await decisions.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));process.stdin.pause();}catch{process.stderr.write('decision_shutdown_drain_failed\n');process.exitCode=1;}}
+});
+await new Promise((resolve,reject) => {
+  const onError = error => { server.off('listening',onListening); reject(error); };
+  const onListening = () => { server.off('error',onError); resolve(); };
+  server.once('error',onError);
+  server.once('listening',onListening);
+  server.listen(Number(process.env.BOB_LOCAL_PORT), '127.0.0.1');
+});
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
+} catch(error) {
+  process.exitCode=1;
+  process.stderr.write(error.code === 'EADDRINUSE' ? 'local_server_startup_failed: EADDRINUSE\n' : 'local_server_startup_failed\n');
+  await shutdown();
+}

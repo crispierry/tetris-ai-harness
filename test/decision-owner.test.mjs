@@ -66,3 +66,55 @@ test('inherited owner stdin accepts only bounded exact JSON commands and never p
  input.write('{bad}\n');input.write(JSON.stringify({action:'list'})+'\n');input.write('x'.repeat(4097)+'\n');await detach();input.destroy();
  assert.deepEqual(commands,[{action:'list'}]);assert.equal(outputs.length,3);assert.ok(outputs.every(value=>!JSON.stringify(value).includes('capability')));
 });
+
+async function delayedApproval(t, stage = 'issue') {
+ const directory=await mkdtemp(path.join(await realpath(os.tmpdir()),'owner-approval-race-'));
+ const policy={maxAttempts:4,maxInputTokens:20000000,maxEstimatedMicros:100000,expiresAt:Date.now()+60000,maxRuns:8,maxEpochs:8,maxPlacements:1000,timeoutMs:1500,reservationTokens:1049600,reservationMicros:1000};
+ const store=await openDecisionStore({directory,lineage:'approval-race',policy,enroll:true});
+ const transport=Object.assign(async()=>{assert.fail('Pairing must not dispatch provider work');},{mode:'fixture'});
+ const service=createDecisionService({enabled:true,store,policy,transport});
+ let at=1,release,entered,failClose=false;
+ const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>entered=resolve);
+ const block=async()=>{entered();await gate;};
+ const proxy={status:service.status,owner:{async issueRun(options){const grant=await service.owner.issueRun(options);if(stage==='issue')await block();return grant;}},async control(capability,action){
+  if(action==='close'&&failClose)throw Object.assign(new Error('injected'),{code:'store_unavailable'});
+  const result=await service.control(capability,action);if(action==='runStatus'&&stage==='admission')await block();return result;
+ }};
+ const owner=createDecisionOwner({service:proxy,now:()=>at});
+ const nonce=randomBytes(32).toString('hex'),nonceDigest=createHash('sha256').update(Buffer.from(nonce,'hex')).digest('hex');
+ const challenge=await owner.register({nonceDigest,mode:'solo',lane:'solo'});
+ const tuple={challengeId:challenge.challengeId,nonceDigest,mode:'solo',lane:'solo'};
+ const settled=owner.command({action:'approve',...tuple}).then(result=>({result}),error=>({error}));
+ t.after(async()=>{release();failClose=false;await settled;await owner.close();await service.close();await rm(directory,{recursive:true,force:true});});
+ await started;
+ return {owner,store,tuple,nonce,settled,release,expire(){at=60002;},failClose(){failClose=true;},restoreClose(){failClose=false;}};
+}
+
+for(const stage of ['issue','admission']) test(`pairing expiry during ${stage} retains and closes the issued durable run`,async t=>{
+ const f=await delayedApproval(t,stage);f.expire();
+ await assert.rejects(f.owner.claim({challengeId:f.tuple.challengeId},f.nonce),{code:'unauthorized'});
+ const waiting=await f.owner.command({action:'list'});assert.equal(waiting.pending.length,1);assert.equal(waiting.pending[0].state,'approving');
+ f.release();const {result,error}=await f.settled;assert.equal(error,undefined);assert.equal(result.state,'expired');
+ assert.equal(Object.values(f.store.snapshot().runs)[0].closed,true);
+ assert.deepEqual(await f.owner.command({action:'list'}),{pending:[],ownerHold:false});
+ assert.equal(f.store.snapshot().used.attempts,0);
+});
+
+for(const action of ['close','shutdown']) test(`owner ${action} waits for an in-flight approval and closes its durable run`,async t=>{
+ const f=await delayedApproval(t);
+ const closing=action==='shutdown'?f.owner.close():f.owner.command({action:'close',...f.tuple});
+ let finished=false;closing.then(()=>finished=true);
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(finished,false);
+ f.release();await closing;const {result,error}=await f.settled;assert.equal(error,undefined);assert.equal(result.state,'closed');
+ assert.equal(Object.values(f.store.snapshot().runs)[0].closed,true);
+ assert.deepEqual((await f.owner.command({action:'list'})).pending,[]);
+});
+
+test('failed expiry cleanup keeps the issued grant available for owner reconciliation',async t=>{
+ const f=await delayedApproval(t);f.expire();f.failClose();f.release();
+ assert.equal((await f.settled).error?.code,'store_unavailable');
+ const held=await f.owner.command({action:'list'});assert.equal(held.ownerHold,true);assert.equal(held.pending[0].state,'owner-hold');
+ assert.equal(Object.values(f.store.snapshot().runs)[0].closed,false);
+ f.restoreClose();assert.deepEqual((await f.owner.command({action:'list'})).pending,[]);
+ assert.equal(Object.values(f.store.snapshot().runs)[0].closed,true);
+});
