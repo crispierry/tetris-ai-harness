@@ -56,3 +56,36 @@ test('mounted comparison terminal announcements interpolate each lane identity a
   terminal(view,1,'error');emit(view);assert.match($('c-announcement').textContent,/Right: Error/);assert.doesNotMatch($('c-announcement').textContent,/Left: Marathon complete/);
   terminal(view,0,'over');emit(view);assert.match($('c-announcement').textContent,/Left: Game over/);c.dispose();
 });
+
+test('Stop disables after the final comparison finishes, while unfinished play and replay stay stoppable',()=>{
+  const {$,doc}=fixture();let emit;
+  const c=mountComparison(doc,{comparisonFactory:options=>{emit=options.onChange;return new Comparison(options);}});
+  try {
+    assert.equal($('c-stop').disabled,true);
+    const view=structuredClone(c.view);view.locked=true;view.state='running';view.auto=true;
+    view.lanes[0].status='won';view.lanes[0].outcome={status:'won'};view.lanes[0].observation.lines=300;
+    emit(view);assert.equal($('c-stop').disabled,false,'the other model is still playing');
+    view.lanes[1].status='won';view.lanes[1].outcome={status:'won'};view.lanes[1].observation.lines=300;
+    view.busy=true;emit(view);assert.equal($('c-stop').disabled,false,'the final drop animation can still be stopped');
+    view.busy=false;view.auto=false;view.state='completed';
+    for(const status of ['won','over','capped','error']){
+      view.lanes[1].status=status;view.lanes[1].outcome={status};emit(view);
+      assert.equal($('c-stop').disabled,true,`finished ${status} comparison`);
+    }
+    view.state='paused';emit(view);assert.equal($('c-stop').disabled,true,'all final outcomes are settled even if paused');
+    view.config.samples=2;emit(view);assert.equal($('c-stop').disabled,false,'another sample remains');
+    view.config.samples=1;view.mode='replay';view.state='replay';view.auto=true;
+    emit(view);assert.equal($('c-stop').disabled,false,'saved replay remains stoppable');
+  } finally {c.dispose();}
+});
+
+test('automatic comparison disables Stop when both controllers reach their placement limit',async()=>{
+  const {$,doc}=fixture();const c=mountComparison(doc);
+  try {
+    $('c-left').value='local';$('c-right').value='local';$('c-pieceCap').value='1';
+    await $('c-start').trigger('click');await until(()=>c.view.state==='completed');
+    assert(c.view.lanes.every(l=>l.outcome.status==='capped'));
+    assert.equal($('c-stop').disabled,true);assert.equal($('c-pause').disabled,true);
+    assert.equal($('c-reset').disabled,false);
+  } finally {c.dispose();}
+});

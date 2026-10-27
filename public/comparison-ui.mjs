@@ -42,7 +42,8 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     const paidBlocked=view.mode!=='replay'&&paid.some(i=>pendingOpenAI(i)||(pairings[i]?.blocked&&!view.lanes[i].outcome));
     $('c-start').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
     $('c-step').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
-    $('c-pause').disabled = !view.auto && !view.busy; $('c-stop').disabled = !view.locked;
+    $('c-pause').disabled = !view.auto && !view.busy;
+    $('c-stop').disabled = !view.locked || (ended && !view.busy);
     $('c-replay').disabled = !view.frameCount; $('c-export').disabled = !view.frameCount;
     text('c-start', view.mode === 'replay' ? 'Play saved frames' : view.locked ? 'Resume' : 'Start');
     text('c-step',view.mode==='replay'?'Next frame':'Step');$('c-step').setAttribute('aria-label',view.mode==='replay'?'Next saved frame':'Step one piece in each eligible lane');

@@ -20,3 +20,21 @@ test('failed comparison shows an incomplete result instead of rewarding the fast
  const clock=fakeClock(),{$,doc,win}=fixture(clock),base=heuristic();const c=mountComparison(doc,{window:win,comparisonFactory:options=>new Comparison({...options,clock,providerFactory:(key,config,{lane})=>lane?base:{...base,decide:async()=>{throw new Error('test failure');}}})});
  try{$('c-pieceCap').value='1';await $('c-step').trigger('click');assert.equal($('c-speed-summary').hidden,false);assert.equal($('c-speed-heading').textContent,'Run incomplete');assert.doesNotMatch($('c-speed-text').textContent,/faster|sooner|×/);assert.equal(clock.size,0);}finally{c.dispose();}
 });
+
+for(const event of ['blur','visibilitychange'])test(`solo manual drop pauses its animation and clock on ${event}`,async()=>{
+ const clock=fakeClock(),{$,doc,win}=fixture(clock),listeners={},frames=new Map();let serial=0;
+ doc.addEventListener=(name,fn)=>listeners[name]=fn;win.addEventListener=(name,fn)=>listeners[name]=fn;
+ win.matchMedia=()=>({matches:false});win.requestAnimationFrame=fn=>{frames.set(++serial,fn);return serial;};win.cancelAnimationFrame=id=>frames.delete(id);
+ const h=mountHarness(doc,{window:win,clock});
+ try{const step=$('h-step').trigger('click');await micro();assert.equal(frames.size,1);assert.equal(h.controller.view.busy,false);await clock.advance(400);doc.hidden=event==='visibilitychange';listeners[event]();
+  assert.equal(frames.size,0);assert.equal(h.timing.running,false);await step;const frozen=h.timing.elapsedMs;await clock.advance(5000);assert.equal(h.timing.elapsedMs,frozen);assert.equal(clock.size,0);
+ }finally{h.dispose();}
+});
+
+test('solo clock resumes when the user retries a local decision failure',async()=>{
+ const clock=fakeClock(),{$,doc,win}=fixture(clock),h=mountHarness(doc,{window:win,clock}),base=heuristic();let release,fail=true;
+ h.controller.setProvider({...base,async decide(p){await new Promise(r=>release=r);if(fail)throw new Error('local test failure');return base.decide(p);}});
+ try{const first=$('h-step').trigger('click');await micro();await clock.advance(500);release();await first;assert.equal(h.controller.view.status,'error');assert.equal(h.timing.running,false);
+  await clock.advance(5000);fail=false;const second=$('h-step').trigger('click');await micro();await clock.advance(300);release();await second;assert.equal(h.controller.view.pieces,1);assert.equal(h.timing.elapsedMs,800);
+ }finally{h.dispose();}
+});
