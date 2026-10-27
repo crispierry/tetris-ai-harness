@@ -1,4 +1,4 @@
-import {FACT_CHOICE_VERSION,placementFacts} from './decision-facts.mjs';
+import {FACT_CHOICE_VERSION,FACT_CHOICE_V1,placementFacts} from './decision-facts.mjs';
 import {decisionFailure} from './decision-failure.mjs';
 import {GRAVITY_TIMING,LEGACY_GRAVITY_TIMING,gravityProofVersion,replayGravityProof,stateFromObservation} from './public/ai-gravity.mjs';
 import {recordedObservation} from './public/decision-record.mjs';
@@ -15,7 +15,7 @@ import {freeze} from './public/harness.mjs';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const same=(a,b)=>digest(a)===digest(b);
 export async function createDecisionBrowserService({store,policy,qualification,credential,fetchImpl=globalThis.fetch,selectionFormat=FACT_CHOICE_VERSION,reverseChoices=false}={}){
- if(![COMPACT_CHOICE_VERSION,HOLE_CHOICE_VERSION,LEGACY_CHOICE_VERSION,FACT_CHOICE_VERSION].includes(selectionFormat)||typeof reverseChoices!=='boolean')fail('browser_configuration');
+ if(![COMPACT_CHOICE_VERSION,HOLE_CHOICE_VERSION,LEGACY_CHOICE_VERSION,FACT_CHOICE_VERSION,FACT_CHOICE_V1].includes(selectionFormat)||typeof reverseChoices!=='boolean')fail('browser_configuration');
  const extended=policy?.kind==='risk-accepted-project-browser-policy-2',limits=extended?BROWSER_LIMITS_V2:BROWSER_LIMITS;
  const choiceOptions=Object.freeze({format:selectionFormat,reverseChoices});
  policy=freeze(structuredClone(policy));qualification=freeze(structuredClone(qualification));

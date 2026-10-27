@@ -3,7 +3,8 @@
 import {createGame,start} from './public/engine.mjs';
 import {observe,enumerate,candidateEvidence,execute,features,freeze} from './public/harness.mjs';
 import {compactDecisionInput,compactMove} from './decision-compact.mjs';
-export const FACT_CHOICE_VERSION='compact-facts-1';
+export const FACT_CHOICE_V1='compact-facts-1';
+export const FACT_CHOICE_VERSION='compact-facts-2';
 
 export function boardFacts(board){
  const holes=[],nearCompleteRows=[],surfaceGaps=[],above=Array(10).fill(0),openRows=[];
@@ -49,12 +50,12 @@ export function nextPieceExample(){
   options:[option(a,'A'),option(b,'B')],explanation:'Both O placements leave zero holes immediately. Their resulting surfaces differ, changing the legal placements available to the next visible Z. Counts and illustrated continuations describe only this fixed teaching board; they are not live move recommendations or predictions of winning.'});
  return example;
 }
-export function factualDecisionInput(packet,{history=[]}={}){
+export function factualDecisionInput(packet,{history=[],format=FACT_CHOICE_VERSION}={}){
  const base=compactDecisionInput(packet,{prioritizeHoles:true});
  // Earlier examples retain their literal boards and consequences, without an
  // answer label. They teach mechanics; no current candidate receives a rating.
  const examples=base.strategyExamples.map(({prefer,why,name,...e},i)=>({...e,name:['Covered empty cells','Filling a covered empty cell','Next spawn occupancy'][i]}));
- return freeze({...base,format:FACT_CHOICE_VERSION,
+ return freeze({...base,format,
   current:{...base.current,boardFacts:boardFacts(packet.observation.board)},
   recentPlacements:history.slice(-5),
   strategyExamples:[...examples,nextPieceExample()],
