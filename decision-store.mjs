@@ -10,7 +10,7 @@ const bad = code => { throw Object.assign(new Error(code), { code }); };
 export async function openDecisionStore({ directory, lineage, policy, enroll = false, faultInjection, ownerRecovery, successorSeed } = {}) {
   if (faultInjection !== undefined && (typeof faultInjection !== 'function' || faultInjection.mode !== 'fixture')) bad('configuration');
   policy = structuredClone(policy);
-  if(ownerRecovery!==undefined&&(!ownerRecovery||Object.keys(ownerRecovery).join(',')!=='expectedLedgerSHA256'||!/^[a-f0-9]{64}$/.test(ownerRecovery.expectedLedgerSHA256??'')||enroll||policy?.kind!=='risk-accepted-project-browser-policy-1'))bad('configuration');
+  if(ownerRecovery!==undefined&&(!ownerRecovery||Object.keys(ownerRecovery).join(',')!=='expectedLedgerSHA256'||!/^[a-f0-9]{64}$/.test(ownerRecovery.expectedLedgerSHA256??'')||enroll||!['risk-accepted-project-browser-policy-1','risk-accepted-project-browser-policy-2'].includes(policy?.kind)))bad('configuration');
   if(successorSeed!==undefined&&(!enroll||ownerRecovery||!successorSeed||Object.keys(successorSeed).sort().join(',')!=='predecessor,used'||!validPredecessor({policy,lineage,...successorSeed})||Object.keys(successorSeed.used).sort().join(',')!=='attempts,estimatedMicros,inputTokens'||Object.values(successorSeed.used).some(n=>!Number.isSafeInteger(n)||n<0)))bad('configuration');
   if (!path.isAbsolute(directory ?? '') || !/^[A-Za-z0-9_-]{1,80}$/.test(lineage ?? '')) bad('configuration');
   directory = path.resolve(directory);

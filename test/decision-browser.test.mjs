@@ -41,6 +41,31 @@ function config(now=Date.now()){
  const qualification={kind:'owner-risk-accepted-decisions-browser-1',model:'gpt-6-luna',endpoint:'https://api.openai.com/v1/decisions',method:'POST',requestSchema:'decisions-create-fixed-1',maxBodyBytes:1048576,maxResponseBytes:65536,activationStartedAt:now,riskAcceptance:{acceptedBy:'Cris',acceptedAt:now,evidenceReference:'dummy approval',riskCode:'unquantified-project-hard-limit-enforcement-delay'},projectEvidence:{projectId:'proj_dummy_browser',keyFingerprint:fingerprint,keyProjectBindingVerified:true,thresholdAmountCents:100,currency:'USD',interval:'month',enforcementStatus:'enforcing',checkedAt:now,evidenceReference:'dummy private project evidence',keyExpiresAt:now+7200000}};
  const policy={kind:'risk-accepted-project-browser-policy-1',qualificationDigest:digest(qualification),maxAttempts:1000,maxRuns:64,maxEpochs:100,maxPlacements:1000,maxConcurrentUpstream:1,timeoutMs:1500,expiresAt:now+3600000,retryLimit:0,fallback:'none'};return {qualification,policy};
 }
+function extendedConfig(){
+ const c=config();c.qualification.projectEvidence.thresholdAmountCents=500;
+ Object.assign(c.policy,{kind:'risk-accepted-project-browser-policy-2',maxAttempts:2000,timeoutMs:10000,qualificationDigest:digest(c.qualification)});return c;
+}
+test('a slow OpenAI response survives the old deadline in both controllers and replays with versioned limits',async t=>{
+ for(const gravity of [false,true]){
+  const configuration=extendedConfig();assert(qualifiedDecisionBrowser(configuration.qualification,configuration.policy));
+  let calls=0;const f=await fixture(t,{configuration,httpServer:true,fetchImpl:upstream({hold:()=>wait(1700),inspect:()=>calls++})});let journal;
+  const c=new (gravity?GravityController:Controller)({sessionId:'browser',provider:f.bridge,onTransition:({input,view})=>journal.append(0,input,view)});
+  journal=new DecisionJournal({mode:'solo'});const p=providerPolicy(f.bridge);assert.equal(p.version,'provider-policy-browser-3');assert.equal(p.limits.timeoutMs,10000);journal.addLane(0,'computer',c.view,gravity?gravityPolicy(p):p);
+  await c.step();assert.equal(c.view.error,null);assert.equal(c.view.pieces,1);assert.equal(calls,1);assert(c.view.lastDecision.latencyMs>1500);assert(validBrowserReceipt(c.view.lastDecision.receipt));
+  const a=await f.bridge.status();assert.equal(a.version,`decision-browser-${gravity?'gravity-':''}accounting-4`);assert(validBrowserAccounting(a));assert.equal(a.remainingAttempts,1999);assert.equal(a.ownerHold,false);assert(verifyDecisionUIRecord(journal.exportRun({metadata:{accounting:a}})).ok);
+  const forged=JSON.parse(journal.exportRun());forged.lanes[0].policy.version='provider-policy-browser-2';assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(forged)));
+ }
+});
+test('server timeout is reported intact without a second interrupt or retry; its debit stays uncertain',async t=>{
+ let calls=0;const f=await fixture(t,{configuration:extendedConfig(),httpServer:true,fetchImpl:async(_url,{signal})=>{calls++;return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true}));}});
+ const p={...await packet(),deadlineMs:500},abort=new AbortController();
+ await assert.rejects(f.bridge.decide(p,{signal:abort.signal}),e=>e.code==='decision_timeout'&&e.responseReceived&&e.diagnostic.phase==='dispatch');
+ abort.abort();await wait(30);const a=await f.bridge.status();assert.equal(calls,1);assert.equal(a.attempts,1);assert.equal(a.uncertain,1);assert.equal(a.reason,'decision_timeout');assert.equal(a.ownerHold,true);assert.equal(a.remainingAttempts,1999);
+});
+test('new limits cannot be silently substituted into historical accounting or a $1 qualification',async t=>{
+ const c=extendedConfig();c.qualification.projectEvidence.thresholdAmountCents=100;c.policy.qualificationDigest=digest(c.qualification);assert.equal(qualifiedDecisionBrowser(c.qualification,c.policy),false);
+ const f=await fixture(t),a=await f.bridge.status();assert.equal(validBrowserAccounting({...a,limits:{...a.limits,timeoutMs:10000}}),false);assert.equal(validBrowserAccounting({...a,attempts:1001,remainingAttempts:999}),false);
+});
 async function directory(t){const root=await mkdtemp(path.join(await realpath(os.tmpdir()),'browser-risk-dummy-'));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));return root;}
 test('owner-qualified $5 budget is authenticated, rendered and replayed without changing the $1 archive contract',async t=>{
  const configuration=config();configuration.qualification.projectEvidence.thresholdAmountCents=500;configuration.policy.qualificationDigest=digest(configuration.qualification);assert(qualifiedDecisionBrowser(configuration.qualification,configuration.policy));

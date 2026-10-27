@@ -1,3 +1,5 @@
+import {BROWSER_LIMITS_V2} from './public/browser-risk-contract.mjs';
+export {BROWSER_LIMITS_V2};
 import {digest} from './decision-store.mjs';
 export const BROWSER_QUALIFICATION_KIND='owner-risk-accepted-decisions-browser-1';
 export const BROWSER_MODE='project-limit-browser';
@@ -11,5 +13,6 @@ export function qualifiedDecisionBrowser(q,p,now=Date.now()){
  if(q.kind!==BROWSER_QUALIFICATION_KIND||q.model!=='gpt-6-luna'||q.endpoint!=='https://api.openai.com/v1/decisions'||q.method!=='POST'||q.requestSchema!=='decisions-create-fixed-1'||q.maxBodyBytes!==1048576||q.maxResponseBytes!==65536||!positive(q.activationStartedAt)||q.activationStartedAt>now||!positive(p.expiresAt)||p.expiresAt<=now||p.expiresAt>q.activationStartedAt+3600000)return false;
  if(!exact(e,['projectId','keyFingerprint','keyProjectBindingVerified','thresholdAmountCents','currency','interval','enforcementStatus','checkedAt','evidenceReference','keyExpiresAt'])||typeof e.projectId!=='string'||!/^proj_[A-Za-z0-9_-]{1,120}$/.test(e.projectId)||!/^[a-f0-9]{64}$/.test(e.keyFingerprint??'')||e.keyProjectBindingVerified!==true||![100,500].includes(e.thresholdAmountCents)||e.currency!=='USD'||e.interval!=='month'||e.enforcementStatus!=='enforcing'||!positive(e.checkedAt)||e.checkedAt>q.activationStartedAt||q.activationStartedAt-e.checkedAt>900000||!positive(e.keyExpiresAt)||p.expiresAt>e.keyExpiresAt||typeof e.evidenceReference!=='string'||e.evidenceReference.length<1||e.evidenceReference.length>500)return false;
  if(!exact(a,['acceptedBy','acceptedAt','evidenceReference','riskCode'])||a.acceptedBy!=='Cris'||a.riskCode!=='unquantified-project-hard-limit-enforcement-delay'||!positive(a.acceptedAt)||a.acceptedAt>q.activationStartedAt||typeof a.evidenceReference!=='string'||a.evidenceReference.length<1||a.evidenceReference.length>500)return false;
- return p.kind==='risk-accepted-project-browser-policy-1'&&p.qualificationDigest===digest(q)&&Object.entries(BROWSER_LIMITS).filter(([k])=>k!=='windowMs').every(([k,v])=>p[k]===v);
+ const v2=p.kind==='risk-accepted-project-browser-policy-2';
+ return (p.kind==='risk-accepted-project-browser-policy-1'||v2&&e.thresholdAmountCents===500)&&p.qualificationDigest===digest(q)&&Object.entries(v2?BROWSER_LIMITS_V2:BROWSER_LIMITS).filter(([k])=>k!=='windowMs').every(([k,v])=>p[k]===v);
 }
