@@ -44,6 +44,14 @@ function policy(p){
   keys(p,['version','kind','rulesVersion','timing','pieceCap'],'human policy');if(p.version!=='manual-focused-clock-1'||p.rulesVersion!==RULES.version)fail('human policy');integer(p.pieceCap,1,1000,'human policy cap');
  }else if(p?.kind==='localHeuristic'){
   keys(p,['version','kind','policy'],'local policy');if(p.version!=='provider-policy-1')fail('local policy version');heuristicPolicy(p.policy);
+ }else if(p?.kind==='localSearch'){
+  keys(p,['version','kind','search'],'local search policy');if(p.version!=='provider-policy-1')fail('local search policy version');
+  const q=p.search;keys(q,['version','rulesVersion','featureVersion','objective','tier','depth','nodeCap','callCap','timeMs','maxOutputBytes','discount','evaluator','rootReward','terminalOrder','tieOrder','pruning','cache','cacheKeyDefinition','nodeUnit','reachabilityBounds','horizon','live','modelCalls','spendCapUSD'],'search policy');
+  if(q.version!=='visible-placement-search-2'||q.rulesVersion!==RULES.version||q.featureVersion!==VERSIONS.features||q.objective!==RULES.objective||![1,2].includes(q.depth)||q.tier!==`visible-depth-${q.depth}-full-occupancy-v1`||q.live!==false||q.modelCalls!==0||q.spendCapUSD!==0||q.cache!=='none'||q.pruning!=='none; every offered root and reachable child within caps')fail('local search contract');
+  integer(q.nodeCap,1,4000,'search node cap');integer(q.callCap,1,4000,'search call cap');integer(q.timeMs,1,5000,'search time cap');integer(q.maxOutputBytes,4096,4194304,'search output cap');if(typeof q.discount!=='number'||!Number.isFinite(q.discount)||q.discount<0||q.discount>1)fail('search discount');
+  eq(q.reachabilityBounds,{poses:800,transitions:4000},'search reachability');
+  keys(q.evaluator,['name','kind','version','policy'],'search evaluator');const e=q.evaluator;if(!['local','mock'].includes(e.kind)||typeof e.name!=='string'||!e.name||typeof e.version!=='string'||!e.version)fail('search evaluator identity');
+  allow(e.policy,['weights','terminalPenalty','completionReward','valueRange','meaning','formula','mockMode','delayMs'],'search evaluator policy');keys(e.policy.weights,['holes','aggregateHeight','maxHeight','bumpiness','lines'],'search weights');for(const n of [...Object.values(e.policy.weights),e.policy.terminalPenalty,e.policy.completionReward])if(typeof n!=='number'||!Number.isFinite(n)||Math.abs(n)>1e9)fail('search evaluator numeric');eq(e.policy.valueRange,[-1000000,1000000],'search value range');if(typeof e.policy.meaning!=='string'||!e.policy.meaning)fail('search evaluator meaning');
  }else if(p?.kind==='mock'){
   keys(p,['version','kind','name','fixture'],'mock policy');if(p.version!=='provider-policy-1')fail('mock policy version');keys(p.fixture,['mode','policyVersion','policy','liveEnabled','mockMode','delayMs'],'mock fixture');heuristicPolicy(p.fixture.policy);if(p.fixture.liveEnabled!==false||p.fixture.mode!=='offline-mock'||!['delay','error','stale','invalid','never'].includes(p.fixture.mockMode))fail('mock fixture');integer(p.fixture.delayMs,0,60000,'mock delay');
  }else fail('unsupported policy kind');
@@ -66,7 +74,18 @@ function pilotReceipt(r,i,p){
  if(!r.usage||!['input_tokens','output_tokens','total_tokens'].every(k=>Number.isSafeInteger(r.usage[k])&&r.usage[k]>=0)||r.usage.total_tokens!==r.usage.input_tokens+r.usage.output_tokens)fail('pilot usage required');
  allow(r.usage,['input_tokens','output_tokens','total_tokens','cached_input_tokens','cache_read_input_tokens','cache_write_input_tokens','input_tokens_details'],'pilot usage');for(const [k,v]of Object.entries(r.usage)){if(k==='input_tokens_details'){allow(v,['cached_tokens','cache_write_tokens'],'pilot cache detail');for(const n of Object.values(v))integer(n,0,r.usage.input_tokens,'pilot cache tokens');}else integer(v,0,['input_tokens','output_tokens','total_tokens'].includes(k)?Number.MAX_SAFE_INTEGER:r.usage.input_tokens,'pilot tokens');}
 }
-function receipt(r,i,p){
+function searchReceipt(r,i,p,offered){
+ keys(r,['requestId','errorCode','search','usage','actualCostUSD','provenance'],'search receipt');finiteJSON(r);
+ if(size(r)>4096||r.requestId!==i.requestId||r.errorCode!==null||r.usage!==null||r.actualCostUSD!==null||r.provenance!=='Local/mock leaf evaluations; no live model calls')fail('search receipt binding');
+ const q=r.search;keys(q,['nodes','evaluatorCalls','rootsOffered','rootsCompleted','childrenEnumerated','leavesEvaluated','pruned','elapsedMs'],'search stats');
+ for(const [key,n]of Object.entries(q)){if(key==='elapsedMs'){if(!Number.isFinite(n)||n<0||n>60000)fail('search elapsed');}else integer(n,0,10000000,'search count');}
+ if(q.nodes>p.search.nodeCap||q.evaluatorCalls>p.search.callCap||q.rootsOffered!==offered||q.rootsCompleted!==q.rootsOffered||q.pruned!==0||
+    q.nodes!==q.rootsOffered+q.childrenEnumerated||q.evaluatorCalls!==q.leavesEvaluated||q.leavesEvaluated<q.rootsOffered||q.leavesEvaluated>q.nodes||
+    (p.search.depth===1&&(q.childrenEnumerated!==0||q.leavesEvaluated!==q.rootsOffered))||
+    (p.search.depth===2&&q.leavesEvaluated<q.childrenEnumerated))fail('incomplete search receipt');
+}
+function receipt(r,i,p,offered){
+ if(p.kind==='localSearch'){searchReceipt(r,i,p,offered);return;}
  if(p.version==='provider-policy-browser-1'){if(!validBrowserReceipt(r)||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId)fail('browser receipt binding');return;}
  if(p.version==='provider-policy-pilot-1'){pilotReceipt(r,i,p);return;}
  if(r===null){if(p.kind==='externalDecisions')fail('missing compact receipt');return;}
@@ -79,6 +98,14 @@ function receipt(r,i,p){
 /** Throws on corrupt/unsupported records. Success is conditional replay, never provenance authentication. */
 export function verifyDecisionUIRecord(input){
  if(typeof input!=='string')fail('supply the exact saved JSON text');if(size(input)>64*1024*1024)fail('byte limit');let r;try{r=JSON.parse(input);}catch{fail('invalid JSON');}
+ if(r?.version==='decision-ui-comparison-series-1'){
+  keys(r,['version','plannedSamples','records'],'comparison series');integer(r.plannedSamples,1,8,'series samples');
+  if(size(input)>16*1024*1024||!Array.isArray(r.records)||r.records.length<1||r.records.length>r.plannedSamples||r.records.some(x=>x?.version!=='decision-ui-record-2'||x.mode!=='comparison'))fail('series records');
+  const results=r.records.map(x=>verifyDecisionUIRecord(JSON.stringify(x)));if(r.records.some(x=>x.pieceCap!==r.records[0].pieceCap)||2*r.plannedSamples*r.records[0].pieceCap>2000)fail('series placement bound');
+  if(results.reduce((n,x)=>n+x.events,0)>LIMITS.comparison.events)fail('series event bound');
+  const sessions=new Set();for(const record of r.records)for(const lane of record.lanes){const id=lane.initial.observation.sessionId;if(sessions.has(id))fail('series session reuse');sessions.add(id);}
+  return {ok:true,canonical:true,version:r.version,mode:'comparison',samples:results.length,events:results.reduce((n,x)=>n+x.events,0),lanes:2,archiveIncomplete:results.some(x=>x.archiveIncomplete),outcomes:results.map(x=>x.outcomes),assurance:r.records[0].assurance};
+ }
  if(r?.version==='decision-ui-record-1')return {ok:false,version:r.version,assurance:'legacy-visual-only',canonical:false,reason:'Version 1 omits canonical inputs and human clock-only ticks; canonical verification unsupported.'};
  if(r?.version!=='decision-ui-record-2')fail('unsupported version');
  keys(r,['version','mode','rulesVersion','schemas','objective','pieceCap','lanes','events','finals','metadata','archive','assurance','replay'],'envelope');
@@ -102,8 +129,8 @@ export function verifyDecisionUIRecord(input){
   const human=l.kind==='human';
   if(i.kind==='computer'){
    keys(i,['kind','requestId','revision','selectedCandidateId','piece','orientation','cells','path','receipt','latencyMs'],'computer input');if(human||s.status!=='playing'||l.recovery)fail('computer state');
-   request(l,i,before);receipt(i.receipt,i,l.policy);if(!Number.isFinite(i.latencyMs)||i.latencyMs<0||i.latencyMs>60000)fail('decision latency');points(i.cells,'selected cells');integer(i.orientation,0,3,'selected orientation');if(!RULES.types.includes(i.piece)||!Array.isArray(i.path)||i.path.length<1||i.path.length>800||i.path.some(a=>!['left','right','clockwise','down','drop'].includes(a)))fail('selected route');
-   const binding={sessionId:before.sessionId,revision:rev};const c=enumerate(s,binding).find(c=>c.id===i.selectedCandidateId);
+   request(l,i,before);if(!Number.isFinite(i.latencyMs)||i.latencyMs<0||i.latencyMs>60000)fail('decision latency');points(i.cells,'selected cells');integer(i.orientation,0,3,'selected orientation');if(!RULES.types.includes(i.piece)||!Array.isArray(i.path)||i.path.length<1||i.path.length>800||i.path.some(a=>!['left','right','clockwise','down','drop'].includes(a)))fail('selected route');
+   const binding={sessionId:before.sessionId,revision:rev},offered=enumerate(s,binding);receipt(i.receipt,i,l.policy,offered.length);const c=offered.find(c=>c.id===i.selectedCandidateId);
    if(!c)fail('selected candidate binding');eq(i.path,c.path,'canonical path');eq(i.cells,c.cells,'selected cells');eq(i.orientation,c.orientation,'selected orientation');eq(i.piece,c.piece,'selected piece');s=execute(s,c,binding);rev++;pieces++;status=['won','over'].includes(s.status)?s.status:e.status;
    if(!['won','over','running','paused'].includes(status))fail('computer status');l.attempt='computer';
   }else if(i.kind==='spawn'){

@@ -102,6 +102,7 @@
 <option value="look2">Lookahead depth 2</option>
 <option value="delay">Delayed mock</option>
 <option value="error">Error mock</option>
+<option value="openai">OpenAI Decisions</option>
 </select>
 <label for="c-right">Right player</label>
 <select id="c-right">
@@ -128,13 +129,17 @@
 </div>
 <button id="c-reset" class="button button-quiet">Reset</button>
 </div>
-<p id="c-progress" class="run-progress">Ready</p>
+<p id="c-replay-notice" class="replay-notice" hidden>Saved replay · No new requests</p>
 <p id="c-error" class="comparison-error" role="alert" hidden>
 </p>
+<div class="provider-connections">
+<div id="decision-pairing-left"></div>
 <div id="decision-pairing">
+</div>
 </div>
 <details>
 <summary>Run details</summary>
+<p id="c-progress" class="run-progress">Ready</p>
 <div class="archive-actions">
 <button id="c-replay" class="button button-secondary" disabled>Replay</button>
 <button id="c-export" class="button button-secondary" disabled>Export run</button>

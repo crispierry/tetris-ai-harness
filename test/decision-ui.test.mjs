@@ -27,8 +27,8 @@ async function fixture(t,{mode,lane,hold=false,maxAttempts=8}={}) {
  t.after(async()=>{release?.();await bridge.close();await owner.close();await service.close();server.closeAllConnections();await new Promise(r=>server.close(r));await rm(directory,{recursive:true,force:true});});
  return {bridge,store,grant,get calls(){return calls;},get release(){return release;}};
 }
-test('external comparison enforces single right lane; delayed fixture leaves local peer independent and replay makes zero requests',async t=>{
- assert.throws(()=>validateConfig({left:'openai',right:'openai'}));assert.throws(()=>validateConfig({left:'look1',right:'openai'}));assert.throws(()=>validateConfig({right:'openai',samples:2}));
+test('external comparison accepts independent player selection; delayed fixture leaves local peer independent and replay makes zero requests',async t=>{
+ assert.equal(validateConfig({left:'openai',right:'openai'}).left,'openai');assert.equal(validateConfig({left:'look1',right:'openai'}).left,'look1');assert.equal(validateConfig({right:'openai',samples:2,pieceCap:10}).samples,2);
  const f=await fixture(t,{mode:'comparison',lane:'right',hold:true});const c=new Comparison({config:{left:'local',right:'openai',pieceCap:3,paceMs:30},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});t.after(()=>c.dispose());
  c.start();await until(()=>f.release);await until(()=>c.view.lanes[0].pieces>=2);assert.equal(c.view.lanes[1].pieces,0);assert.equal(c.view.lanes[0].policy.kind,'localHeuristic');assert.equal(c.view.lanes[1].policy.kind,'externalDecisions');assert.ok(!JSON.stringify(c.view.lanes[1].policy).includes('weights'));
  c.pause();assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);f.release();await wait(5);assert.equal(c.view.lanes[1].pieces,0);assert.equal(c.view.lanes[1].recoveryRequired,true);

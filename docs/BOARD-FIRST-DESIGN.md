@@ -15,3 +15,9 @@ USD pricing snapshot, October26,2026: ordinary input $0.10 per million, cache-re
 Sources: [Decisions pricing](https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability), [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching), [pricing](https://developers.openai.com/api/docs/pricing).
 
 Validation: compare first-board rectangles across all routes and paired-board tops/sizes, desktop and narrow layouts, text enlargement, keyboard focus, normal/error/permission states, replay/export and cost deduplication/reset/partial handling. Source checks, independent source/functional review and designer review of rendered evidence are separate acceptance steps.
+
+## MacBook layout refinement
+
+Astra reviewed the source and rendered four-page layout at 1200×700. Every lane now reserves the same 40px heading with the compact player name above status, with no inherited row gap. Four fixed metric columns and 32px next-piece previews keep the complete stage in view. Compare selectors share one row; routine progress and placement facts live in Run details. Connected OpenAI uses a short request-count summary and hides the inactive Connect button; expiry and full accounting remain in Provider details. Blocking, interrupted, stale and expired statuses retain their complete messages, and the exact monthly budget-risk disclosure remains visible. Replay keeps a visible no-new-requests notice.
+
+Rendered checks: at 1200×700, every first board starts at (52,159), measures 200×400, and Next ends at 657.2px. At 1512×850, every first board starts at (208,159), measures 265×530, and Next ends at 787.2px. Both paired boards have identical top coordinates. The normal four-page layouts have no horizontal or vertical overflow at either size. Temporary device emulation is reset after verification.

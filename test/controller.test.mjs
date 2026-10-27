@@ -43,3 +43,14 @@ test('effective heuristic policy is immutable and mock metadata identifies its a
  assert.throws(()=>{p.runMetadata.policy.weights.holes=3;},TypeError);
  const mock=mockProvider({mode:'error',delayMs:7});assert.equal(mock.runMetadata.mode,'offline-mock');assert.equal(mock.runMetadata.mockMode,'error');assert.equal(mock.runMetadata.delayMs,7);assert.equal(mock.runMetadata.liveEnabled,false);
 });
+
+test('Reset fences late confirmation failures while retaining the pending-confirmation gate',async()=>{
+ for(const outcome of ['resolve','reject']){
+  let settle,entered;const waiting=new Promise(r=>entered=r);let confirmations=0;
+  const c=new Controller({provider:{...heuristic(),confirmCommitted(){if(++confirmations===1){entered();return new Promise((resolve,reject)=>settle=()=>outcome==='resolve'?resolve():reject(new Error('late confirmation')));}}}});
+  const old=c.step();await waiting;assert.equal(c.view.pieces,1);assert.equal(c.view.busy,true);
+  c.reset();assert.equal(c.view.busy,true);await assert.rejects(c.step(),/already in progress/);
+  settle();await old;assert.equal(c.view.busy,false);assert.equal(c.view.recoveryRequired,false);assert.equal(c.view.error,null);assert.equal(c.view.status,'ready');assert.equal(c.view.pieces,0);
+  await c.step();assert.equal(c.view.pieces,1);
+ }
+});

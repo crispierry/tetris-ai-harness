@@ -121,6 +121,7 @@ export class Controller {
       return job.epoch===this.#epoch?this.#last:null;
     } catch (error) {
       if(job.committed){
+        if(job.epoch!==this.#epoch||this.#pending!==job)return null;
         this.#recovery=true;this.#confirmationHold=true;this.#error='Placement retained. Confirmation is unavailable; local owner reconciliation is required.';
         if(job.epoch===this.#epoch&&!isTerminal(this.#state.status)){const stopped=this.#status==='stopped';this.#record({kind:stopped?'stop':'pause'},{status:stopped?'stopped':'paused'});if(this.#controlSerial===job.controlSerial)this.#status='error';}
         return null;

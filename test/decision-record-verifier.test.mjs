@@ -99,3 +99,23 @@ test('bounded exact clock vectors preserve a full >750-placement Marathon export
 test('Node CLI hashes exact saved bytes, preserves bad input and reports explicit legacy assurance',async()=>{
  const directory=await mkdtemp(path.join(os.tmpdir(),'decision-verify-'));try{const file=path.join(directory,'record.json'),json=decisionRecord({mode:'solo',policies:[],frames:[],finals:[],reasons:[]});await writeFile(file,json);assert.equal(verifyDecisionUIRecord(json).assurance,'legacy-visual-only');await assert.rejects(promisify(execFile)(process.execPath,['verify-decision-record.mjs',file]),e=>e.code===2&&JSON.parse(e.stdout).sha256.length===64);assert.equal(await readFile(file,'utf8'),json);await writeFile(file,'{bad');await assert.rejects(promisify(execFile)(process.execPath,['verify-decision-record.mjs',file]),e=>e.code===1&&/invalid JSON/.test(e.stderr));assert.equal(await readFile(file,'utf8'),'{bad');}finally{await rm(directory,{recursive:true,force:true});}
 });
+
+test('comparison samples share one canonical event budget and preserve a verifiable censored prefix',async()=>{
+ const f=bridgeFixture(),c=new Comparison({config:{left:'local',right:'openai',samples:2,pieceCap:1},providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
+ try{
+  for(let n=0;n<1997;n++)c.pause();await c.step();await c.step();
+  const record=JSON.parse(c.exportRun());assert.equal(record.version,'decision-ui-comparison-series-1');
+  assert(record.records.reduce((n,r)=>n+r.events.length,0)<=4000);assert(c.view.archiveError);assert.equal(c.view.auto,false);assert.equal(f.calls,1);
+  const verified=verifyDecisionUIRecord(JSON.stringify(record));assert.equal(verified.archiveIncomplete,true);assert.equal(verified.samples,2);
+ }finally{c.dispose();await f.bridge.close();}
+});
+
+test('comparison series reject sessions reused on the opposite lane',async()=>{
+ const f=bridgeFixture(),c=new Comparison({config:{left:'local',right:'openai',pieceCap:1},providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
+ try{
+  await c.step();const first=JSON.parse(c.exportRun()),mirrored=clone(first);
+  mirrored.lanes.reverse().forEach((l,i)=>l.id=i);mirrored.events.forEach(e=>e.lane=1-e.lane);mirrored.finals.reverse().forEach((f,i)=>f.lane=i);
+  assert.equal(verifyDecisionUIRecord(JSON.stringify(mirrored)).ok,true);
+  assert.throws(()=>verifyDecisionUIRecord(JSON.stringify({version:'decision-ui-comparison-series-1',plannedSamples:2,records:[first,mirrored]})),/session reuse/);
+ }finally{c.dispose();await f.bridge.close();}
+});

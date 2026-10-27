@@ -24,7 +24,7 @@ The repository supplies no qualified real configuration. Account/project/key ver
 
 ## Pairing and play
 
-Select OpenAI, Connect, and match the full fingerprint to the local inherited owner-stdin listing. The existing exact owner approval command issues a one-time grant. Connect alone issues no game decision and never starts play. The resulting screen is connected and paused until the human presses Start or Step. Comparison still requires local left, OpenAI right and one sample. There is no HTTP approval route or automatic grant.
+Select OpenAI, Connect, and match the full fingerprint to the local inherited owner-stdin listing. The existing exact owner approval command issues a one-time grant. Connect alone issues no game decision and never starts play. The resulting screen is connected and paused until the human presses Start or Step. Comparison players are selected independently on either side. Each OpenAI lane pairs separately; local heuristic, Lookahead depths 1 and 2, and mock players can oppose it. Two OpenAI lanes share the same aggregate project/session allowance and serialize decision work to respect one unsettled upstream. Multiple samples advance each grant to a new epoch without refilling allowance; exported series retain the canonical record for every sample. There is no HTTP approval route or automatic grant.
 
 The existing pairing panel permanently displays this line for browser risk mode, including before Start:
 

@@ -13,13 +13,13 @@ export function estimateDecisionNanos(receipt){
 const usd=new Intl.NumberFormat(undefined,{style:'currency',currency:'USD',minimumFractionDigits:4,maximumFractionDigits:4});
 export function createTestCostMeter(){
  let game=null,total=0n,partial=false,unknown=false,seen=new Set();
- return {update({gameId,receipt,error=false,busy=false,replay=false,openAI=false,tracked=true}={}){
+ return {update({gameId,receipt,receipts=[],error=false,busy=false,replay=false,openAI=false,tracked=true}={}){
   if(!replay&&gameId!==game){game=gameId;total=0n;partial=false;unknown=false;seen.clear();}
   if(!replay&&openAI){
    if(error)partial=true;
-   if(receipt&&!seen.has(receipt.requestId)){
+   for(const item of [receipt,...receipts]){if(!item)continue;const receipt=item;if(!seen.has(receipt.requestId)){
     seen.add(receipt.requestId);const nanos=estimateDecisionNanos(receipt);if(nanos===null){unknown=true;partial=true;}else total+=nanos;
-   }
+   }}
   }
   const unavailable=!tracked||unknown||(partial&&seen.size===0),amount=total>0n&&total<100000n?'<$0.0001':usd.format(Number(total)/1e9);
   return Object.freeze({text:!openAI?'OpenAI cost $0 · Local run':unavailable?'Test cost unavailable':`${replay?'Recorded test cost':'Test cost'} (est.${partial?', partial':''}) ${amount}`,note:openAI&&(partial||unknown)?'Some request costs are unknown.':openAI&&busy?'Request in progress; estimate may increase.':'',estimatedUSD:openAI&&!unavailable?Number(total)/1e9:null,partial,decisions:seen.size});
