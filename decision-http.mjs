@@ -1,6 +1,7 @@
+import {validDecisionDiagnostic} from './public/decision-errors.mjs';
 // Same-origin transport boundary, shared by the local server and owned fixture servers.
 const MAX = 1048576;
-const codes = new Set(['disabled','unavailable','unauthorized','overlap','input','epoch','revision','continuity','limit','budget','duplicate','collision','cancelled','transport_ambiguous','authentication','rate_limit','provider_error','refusal','schema','model_mismatch','size','unsupported_candidates','store_unavailable','reconciliation_required','session_request_limit','session_expired','project_budget_limit','quota_unknown','pilot_usage_required']);
+const codes = new Set(['decision_timeout','disabled','unavailable','unauthorized','overlap','input','epoch','revision','continuity','limit','budget','duplicate','collision','cancelled','transport_ambiguous','authentication','rate_limit','provider_error','refusal','schema','model_mismatch','size','unsupported_candidates','store_unavailable','reconciliation_required','session_request_limit','session_expired','project_budget_limit','quota_unknown','pilot_usage_required']);
 export function createDecisionHandler({ service, host, origin, owner } = {}) {
   if (!service || !/^127\.0\.0\.1:\d{1,5}$/.test(host ?? '') || origin !== `http://${host}`) throw new Error('configuration');
   return async (request, response) => {
@@ -40,7 +41,7 @@ export function createDecisionHandler({ service, host, origin, owner } = {}) {
         if ((['proof','observation'].some(k=>Object.hasOwn(body,k))&&body.action!=='settleGravity') || Object.keys(body).some(k => !['action','epoch',...(service.browserRisk?['requestId','proof','observation']:[])].includes(k)) || (Object.hasOwn(body,'requestId')&&!['acceptDecision','interrupt','settleGravity'].includes(body.action))) { send(400,{error:'input'}); return true; }
         send(200,await service.control(cap,body.action,body.epoch,service.browserRisk?{requestId:body.requestId,proof:body.proof,observation:body.observation}:undefined));
       }
-    } catch (e) { send(e.code === 'unauthorized' ? 403 : 400,{error:codes.has(e.code) ? e.code : 'unavailable'}); }
+    } catch (e) { send(e.code === 'unauthorized' ? 403 : 400,{error:codes.has(e.code) ? e.code : 'unavailable',...(service.browserRisk&&validDecisionDiagnostic(e.diagnostic)?{diagnostic:e.diagnostic}:{})}); }
     finally { request.off('aborted',disconnect); request.off('error',disconnect); response.off('close',responseClose); }
     return true;
   };

@@ -31,6 +31,7 @@ export function packetCheck(packet, config) {
   if (packet.candidates.length > config.maxCandidates) fail('unsupported_candidates');
 }
 export function requestFor(protocol, packet, config) {
+  if(protocol==='decisions'&&packet.candidates.length<2)fail('unsupported_candidates');
   const ids = packet.candidates.map(c => c.id), instructions = protocol === 'decisions'
     ? 'Select exactly one supplied current legal placement ID as the native placement Choice answer. Use the complete rules, objective and immediate consequences in the public packet; replan on the next turn.'
     : 'Choose one legal placement ID using the complete rules, objective and consequences in the supplied public packet.';

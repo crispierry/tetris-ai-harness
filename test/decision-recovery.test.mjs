@@ -3,6 +3,7 @@ import {mkdtemp,realpath,mkdir,chmod,writeFile,readFile,rm} from 'node:fs/promis
 import {openDecisionStore,digest} from '../decision-store.mjs';
 import {reconcileAbandonedBrowserRequest,prepareBrowserSuccessor} from '../decision-recovery.mjs';
 import {createDecisionBrowserService} from '../decision-browser-service.mjs';
+import {singlePlacementPacket} from './helpers/single-placement.mjs';
 const key='dummy_recovery_key_only',sha=b=>createHash('sha256').update(b).digest('hex');
 function config(root,lineage,now=Date.now()){
  const qualification={kind:'owner-risk-accepted-decisions-browser-1',model:'gpt-6-luna',endpoint:'https://api.openai.com/v1/decisions',method:'POST',requestSchema:'decisions-create-fixed-1',maxBodyBytes:1048576,maxResponseBytes:65536,activationStartedAt:now,riskAcceptance:{acceptedBy:'Cris',acceptedAt:now,evidenceReference:'dummy owner recovery request',riskCode:'unquantified-project-hard-limit-enforcement-delay'},projectEvidence:{projectId:'proj_dummy_recovery',keyFingerprint:sha(key),keyProjectBindingVerified:true,thresholdAmountCents:100,currency:'USD',interval:'month',enforcementStatus:'enforcing',checkedAt:now,evidenceReference:'dummy project check',keyExpiresAt:now+7200000}};
@@ -23,6 +24,17 @@ test('owner recovery blocks active lock, stale bytes and missing drain without m
  await assert.rejects(reconcileAbandonedBrowserRequest({...f.options,expectedLedgerSHA256:'0'.repeat(64)}),{code:'recovery_evidence'});
  await writeFile(f.options.drainReference,JSON.stringify({...f.drain,localFetchAndResponseStreamSettled:false}),{mode:0o600});await assert.rejects(reconcileAbandonedBrowserRequest(f.options),{code:'recovery_evidence'});
  assert.deepEqual(await readFile(path.join(f.previous.directory,'ledger.json')),f.bytes);
+});
+
+test('legacy rejected singleton recovery requires the exact canonical packet, owner authority and positive drain',async t=>{
+ const f=await fixture(t),p=singlePlacementPacket({gravity:true}),reference=path.join(f.root,'rejected-packet.json');await writeFile(reference,JSON.stringify(p),{mode:0o600});
+ const store=await openDecisionStore({...f.previous,ownerRecovery:{expectedLedgerSHA256:f.options.expectedLedgerSHA256}});
+ await store.transact(s=>{s.requests.target.status='rejected';s.requests.target.digest=digest(p);s.browserSession.reason='transport_ambiguous';});await store.close();
+ const bytes=await readFile(path.join(f.previous.directory,'ledger.json')),hash=sha(bytes);await writeFile(f.options.drainReference,JSON.stringify({...f.drain,afterDrainLedgerSHA256:hash}),{mode:0o600});
+ const options={...f.options,expectedLedgerSHA256:hash,rejectedPacketReference:reference};
+ await assert.rejects(reconcileAbandonedBrowserRequest({...options,rejectedPacketReference:undefined}),{code:'recovery_state'});
+ const bad=structuredClone(p);bad.candidates[0].cells[0].x++;await writeFile(reference,JSON.stringify(bad),{mode:0o600});await assert.rejects(reconcileAbandonedBrowserRequest(options));assert.deepEqual(await readFile(path.join(f.previous.directory,'ledger.json')),bytes);
+ await writeFile(reference,JSON.stringify(p),{mode:0o600});const result=await reconcileAbandonedBrowserRequest(options);assert.equal(result.usedAttempts,28);const reopened=await openDecisionStore(f.previous);assert.equal(reopened.snapshot().requests.target.status,'reconciled-abandoned');assert.equal(reopened.snapshot().used.attempts,28);assert.equal(reopened.snapshot().browserSession.reason,'owner_abandoned_retired');await reopened.close();assert.equal((await prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:f.next})).inheritedAttempts,28);
 });
 test('owner abandonment preserves original uncertainty, policy, attempts and exact bytes; old game remains retired',async t=>{
  const f=await fixture(t),before=JSON.parse(f.bytes),result=await reconcileAbandonedBrowserRequest(f.options);assert.equal(result.usedAttempts,28);assert.equal(result.providerOutcome,'unknown');assert.deepEqual(await readFile(result.backupFile),f.bytes);

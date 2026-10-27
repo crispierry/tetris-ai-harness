@@ -91,9 +91,9 @@ export function createDecisionService({ enabled = false, store, policy, qualific
         const current = () => { if (!available || job.abort.signal.aborted || Date.now() >= deadline || Date.now() >= policy.expiresAt || (mode === 'live' && !qualifiedDecisions(qualification, policy)) || closing || store.snapshot().runs[run.id]?.epoch !== job.epoch || (store.snapshot().runs[run.id]?.closed || (!completed && store.snapshot().runs[run.id]?.terminal))) fail('cancelled'); };
         current();
         key = `${run.id}:${run.epoch}:${p.requestId}`;
-        const request = requestFor('decisions', p, config);
-        if (Buffer.byteLength(JSON.stringify(request.body)) > 1048576) fail('input');
         const upstream = p.candidates.length > 1;
+        const request = upstream ? requestFor('decisions', p, config) : null;
+        if (request && Buffer.byteLength(JSON.stringify(request.body)) > 1048576) fail('input');
         await store.transact(s => {
           const r = authenticate(capability, s); current();
           if (s.requests[key]) fail(s.requests[key].digest === digest(p) ? 'duplicate' : 'collision');
