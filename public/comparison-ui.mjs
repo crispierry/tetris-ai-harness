@@ -1,3 +1,4 @@
+import {mountRunClocks} from './run-timing.mjs';
 import {mountTestCost} from './test-cost.mjs';
 import {compactPlayerName,visibleOutcome} from './arcade-copy.mjs';
 import {createPlacementPresenter} from './placement-motion.mjs';
@@ -25,9 +26,11 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     $(`c-${index}-board`).append(tile); return tile;
   }));
   const visual=new Map(),presenters=[0,1].map(lane=>createPlacementPresenter({window:win,onFrame:observation=>{visual.set(lane,observation);render(comparison.view);},onSettled:()=>{visual.delete(lane);}}));
-  let previousAnnouncement = '', previousLaneStates = [], disposed=false;
+  let previousAnnouncement = '', previousLaneStates = [], disposed=false,runClocks=null;
   function render(view) {
     if(disposed)return;
+    runClocks?.update();
+    const speed=$('c-speed-summary'),pace=view.summary?.pace;if(speed){speed.hidden=!pace;if(pace){text('c-speed-heading',pace.title);text('c-speed-text',pace.text);text('c-speed-detail',pace.detail);}}
     const selected=['left','right'].map(side=>$('c-'+side).value),paid=selected.flatMap((key,i)=>key==='openai'?[i]:[]),searching=selected.some(key=>['lookahead','look1','look2'].includes(key));
     const costLanes=paid.map(i=>view.lanes[i]);updateCost({gameId:view.runId,receipts:costLanes.map(l=>l.lastDecision?.receipt).filter(Boolean),error:costLanes.some(l=>!!l.error),busy:costLanes.some(l=>['choosing','queued'].includes(l.status)),replay:view.mode==='replay',openAI:paid.length>0,tracked:costLanes.every(l=>l.policy?.kind==='externalDecisions')});
     const risk=$('decision-budget-risk');if(risk){risk.textContent='$1 monthly project limit. Billing enforcement can be delayed; charges may exceed that limit.';risk.hidden=!paid.some(i=>pairings[i]?.session.state.mode==='project-limit-browser'||pairings[i]?.session.state.admission?.mode==='project-limit-browser');}
@@ -72,7 +75,8 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
         const label = doc.createElement('span'); label.textContent = type; item.append(mini, label); $(prefix + 'next').append(item);
       });
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
-      text(prefix + 'outcome', visibleOutcome(lane.recordedStatus ?? lane.status, obs, lane.error));
+      const outcome=visibleOutcome(lane.recordedStatus ?? lane.status, obs, lane.error);$(prefix+'status').title=outcome;
+      text(prefix + 'outcome', canonical.outcome?'':outcome);
       text(prefix + 'choice', lane.lastDecision ? `${lane.lastDecision.candidate.piece} · ${Math.round(lane.lastDecision.latencyMs)} ms decision attempt latency${view.mode === 'replay' ? ' (recorded)' : ''}` : 'No piece selected yet.');
       text(prefix + 'details', JSON.stringify({ receipt:lane.lastDecision?.receipt??null,placement: lane.lastDecision?.candidate ?? null, search: lane.search, policy: lane.policy,
         recordedStatus: lane.recordedStatus ?? null, valueMeaning: 'Raw board features; scalar leaf value is not a probability.' }, null, 2));
@@ -85,13 +89,14 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       const laneStates = view.lanes.map(l => ['running','playing','choosing'].includes(l.status) ? 'active' : l.status);
       const changed = view.lanes.flatMap((lane, i) => laneStates[i] === previousLaneStates[i] ? [] :
         [`${["Left", "Right"][i]}: ${STATUS[lane.status]}. ${['won','capped','over','error'].includes(lane.status) ? outcomeDetail(lane.status,lane.observation,lane.error) : ''}`]);
-      text('c-announcement', `${progress}. ${changed.join(' ')}`);
+      text('c-announcement', `${progress}. ${changed.join(' ')}${s.pace&&view.mode!=='replay'?' '+s.pace.text:''}`);
       previousLaneStates = laneStates; previousAnnouncement = announcement;
     }
     if (view.archiveError) { $('c-error').hidden = false; text('c-error', view.archiveError); }
   }
   let pairings=[];
   const comparison = comparisonFactory({onChange:render,onPlacement:event=>presenters[event.lane].play(event),providerFactory:(key,config,{lane})=>key==='openai'?pairings[lane].session.provider:providerFor(key,config)});
+  runClocks=mountRunClocks(doc,{window:win,read:()=>comparison.timing,ids:{0:'c-0-clock',1:'c-1-clock'}});
   const settings=()=>Object.fromEntries(SETTINGS.map(key=>[key,key==='gravity'?$('c-gravity').checked===true:['left','right'].includes(key)?$('c-'+key).value:Number($('c-'+key).value)]));
   const ready=()=>['left','right'].every((side,i)=>settings()[side]!=='openai'||pairings[i]?.session.state.state==='connected');
   pairings=['left','right'].map((side,index)=>mountDecisionPairing(doc,{mode:'comparison',lane:side,window:win,rootId:index?'decision-pairing':'decision-pairing-left',manageBudget:false,title:`${index?'Right':'Left'} · OpenAI`,connectLabel:index?'Connect OpenAI':'Connect left OpenAI',onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings()[side]!=='openai')throw new Error(`Select OpenAI on the ${side} before connecting.`);},onConnected:()=>{try{if(ready())comparison.configure(settings());else render(comparison.view);$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}}));
@@ -103,7 +108,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   SETTINGS.forEach(key=>$('c-'+key).addEventListener('change',act(()=>{['left','right'].forEach((side,i)=>pairings[i]?.setEnabled(settings()[side]==='openai'));if(!ready()){render(comparison.view);return;}comparison.configure(settings());})));
   pairings.forEach(p=>p?.setEnabled(false));
   const disposeComparison=comparison.dispose.bind(comparison);
-  comparison.dispose=()=>{if(disposed)return;disposed=true;presenters.forEach(p=>p.dispose());disposeComparison();pairings.forEach(p=>{void p?.session.close().catch(()=>{});});};
+  comparison.dispose=()=>{if(disposed)return;disposed=true;runClocks?.dispose();presenters.forEach(p=>p.dispose());disposeComparison();pairings.forEach(p=>{void p?.session.close().catch(()=>{});});};
   for (const action of ['start', 'step']) $('c-' + action).addEventListener('click', act(async () => {
     if (!comparison.view.locked) comparison.configure(settings()); await comparison[action](); await refresh();
   }));

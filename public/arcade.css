@@ -75,3 +75,9 @@
 .arcade-shell .gravity-toggle input:checked{background:#23745e;border-color:#84d9bd}.arcade-shell .gravity-toggle input:checked::after{inset-inline-start:17px}
 .arcade-shell .gravity-toggle:has(input:disabled){color:var(--muted);cursor:default}.arcade-shell .gravity-toggle input:disabled{cursor:default;opacity:.7}
 @media(max-width:960px){.mobile-control-slot .gravity-toggle{grid-column:1/-1;justify-content:flex-start;min-block-size:32px}.mobile-control-slot .gravity-toggle input{margin-inline-start:auto}}
+
+/* Clocks share the existing heading row; board geometry is unchanged. */
+.lane-heading{grid-template-columns:minmax(0,1fr) auto;column-gap:6px}.lane-heading h2{grid-column:1;grid-row:1}.lane-heading :is(.lane-status,.status){grid-column:1/-1;grid-row:2}
+.run-clock{grid-column:2;grid-row:1;align-self:start;min-inline-size:7ch;text-align:end;color:var(--muted);font-size:.75rem;line-height:1.3;font-variant-numeric:tabular-nums;font-feature-settings:"tnum";white-space:nowrap}
+.run-clock[data-running="true"]{color:var(--accent)}
+.speed-summary{border-block-start:1px solid var(--border);padding-block-start:10px;margin-block-start:12px}.arcade-stage .speed-summary h3{color:var(--accent);font-weight:650;margin:0 0 4px}.speed-summary p{font-size:.8125rem;line-height:1.5;margin:4px 0}.speed-summary .note{font-size:.75rem}

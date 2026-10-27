@@ -1,3 +1,4 @@
+import {RunClock,comparisonPace} from './run-timing.mjs';
 import {GravityController} from './gravity-controller.mjs';
 import {gravityPolicy} from './ai-gravity.mjs';
 import {placementEvent,placementBeforeView,depth2Error} from './placement-motion.mjs';
@@ -90,6 +91,8 @@ export class Comparison {
   constructor({ clock, config = {}, onChange = () => {}, providerFactory = providerFor, onPlacement=null } = {}) {
     this.#clock=clock;this.#config = validateConfig(config); this.#onChange = onChange; this.#factory = providerFactory;this.#onPlacement=onPlacement; this.#setup();
   }
+  get timing(){return freeze({replay:this.#mode==='replay',lanes:this.#lanes.map((l,lane)=>({lane,...this.#laneTiming(l),pieces:l.pieces??0}))});}
+  #laneTiming(lane){const current=lane.timer.view,side=lane.index?'right':'left',prior=this.#pairs.filter(p=>p.sample<this.#sample+1).map(p=>p[side+'Timing']);return freeze({...current,elapsedMs:current.elapsedMs+prior.reduce((n,t)=>n+t.elapsedMs,0),decisionMs:current.decisionMs+prior.reduce((n,t)=>n+t.decisionMs,0),decisions:current.decisions+prior.reduce((n,t)=>n+t.decisions,0),started:current.started||prior.length>0});}
   get #external(){return this.#lanes.some(l=>l.provider.kind==='remote');}
   get view() {
     const lanes = this.#mode === 'replay' ? [...this.#replayLanes] : this.#lanes.map(l => this.#laneView(l));
@@ -101,16 +104,16 @@ export class Comparison {
     const view = lane.controller.view;
     return freeze({ ...view,presentation:lane.presentation??null,error:depth2Error(lane.provider,view.error,'comparison'), status: this.#waiting.has(lane)?'queued':lane.outcome?.status ?? view.status, outcome: lane.outcome,
       assistance: lane.provider.runMetadata?.search?.tier??'canonical-afterstates-v1',
-      search: compactSearch(lane.provider), policy: lane.policy });
+      timing:this.#laneTiming(lane),search: compactSearch(lane.provider), policy: lane.policy });
   }
   #emit() { this.#onChange(this.view); }
   #setup() {
     const providers=['left','right'].map((side,index)=>this.#factory(this.#config[side],{...this.#config,depth:this.#config[side+'Depth']},{sample:this.#sample+1,lane:index})),canonical=providers.some(p=>p.kind==='remote');
     this.#lanes = ['left', 'right'].map((side, index) => {
       const key = this.#config[side], provider = providers[index];
-      const lane = { key, provider, outcome: null, controller: null, presentation:null,capturing:false,before:null,policy:this.#config.gravity?gravityPolicy(providerPolicy(provider)):canonical?providerPolicy(provider):lanePolicy(provider, key) };
+      const lane = { index,timer:new RunClock({now:this.#clock?.now??(()=>performance.now())}),pieces:0,key, provider, outcome: null, controller: null, presentation:null,capturing:false,before:null,policy:this.#config.gravity?gravityPolicy(providerPolicy(provider)):canonical?providerPolicy(provider):lanePolicy(provider, key) };
       lane.controller = new (this.#config.gravity?GravityController:Controller)({ seed: this.#seeds[this.#sample], sessionId: provider.controllerBinding?.sessionId ?? `compare-${this.#id}-${this.#epoch}-${index}`, gameEpoch:provider.kind==='remote'?this.#gameEpoch:0,
-        provider,pieceCap:this.#config.pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(index,input,view);}, onChange:view => {if(lane.capturing&&view.busy&&!lane.before){const before=this.#config.gravity?placementBeforeView(view):view;if(before){lane.before=before;lane.presentation={phase:before.status==='placing'?'placing':'choosing',before};}} if(this.#lanes.includes(lane))this.#emit();} });
+        provider,pieceCap:this.#config.pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(index,input,view);}, onChange:view => {if(this.#lanes.includes(lane)){lane.pieces=view.pieces;lane.timer.record(view.lastDecision);}if(lane.capturing&&view.busy&&!lane.before){const before=this.#config.gravity?placementBeforeView(view):view;if(before){lane.before=before;lane.presentation={phase:before.status==='placing'?'placing':'choosing',before};}} if(this.#lanes.includes(lane))this.#emit();} });
       return lane;
     });
     // Finished samples consume the same recording allowance as the active one.
@@ -145,7 +148,7 @@ export class Comparison {
     if (!this.#locked) { this.#locked = true; this.#record(0, 'initial'); this.#record(1, 'initial'); }
   }
   #fence(status = 'paused') {
-    this.#auto = false; this.#epoch++;this.#waiting.clear();for(const lane of this.#lanes){lane.presentation=null;lane.capturing=false;}for(const job of this.#motion.values())job.abort();this.#motion.clear();this.#replayLanes=this.#replayLanes.map(l=>l?.presentation?freeze({...l,presentation:null}):l);
+    this.#auto = false; this.#epoch++;for(const lane of this.#lanes){if(lane.outcome)lane.timer.finish();else lane.timer.pause();}this.#waiting.clear();for(const lane of this.#lanes){lane.presentation=null;lane.capturing=false;}for(const job of this.#motion.values())job.abort();this.#motion.clear();this.#replayLanes=this.#replayLanes.map(l=>l?.presentation?freeze({...l,presentation:null}):l);
     for (const timer of this.#timers) clearTimeout(timer);
     this.#timers.clear();
     for (const lane of this.#lanes) if (!lane.outcome) lane.controller[status === 'stopped' ? 'stop' : 'pause']();
@@ -158,7 +161,7 @@ export class Comparison {
   #finishPair() {
     if (!this.#lanes.every(l => l.outcome) || this.#pairs.some(p => p.sample === this.#sample + 1)) return;
     const [left, right] = this.#lanes.map(l => l.outcome);
-    this.#pairs.push(freeze({ sample: this.#sample + 1, left, right,
+    this.#pairs.push(freeze({ sample: this.#sample + 1, left, right,leftTiming:this.#lanes[0].timer.view,rightTiming:this.#lanes[1].timer.view,
       difference: { score: left.score - right.score, lines: left.lines - right.lines, pieces: left.pieces - right.pieces } }));
   }
   #nextSample() {
@@ -181,6 +184,7 @@ export class Comparison {
   }
   async #one(index,epoch){
     const lane=this.#lanes[index];
+    if(!lane.outcome)lane.timer.start();
     if(this.#config.gravity||lane.provider.kind!=='remote')return this.#place(index,epoch);
     if(epoch!==this.#epoch||lane.outcome||lane.controller.view.busy||this.#waiting.has(lane))return;
     const previous=this.#remoteTail;let release;this.#remoteTail=new Promise(r=>release=r);
@@ -204,7 +208,7 @@ export class Comparison {
     }
     this.#record(index, lane.outcome ? 'outcome' : 'placement');
     if(this.#onPlacement&&lane.before&&v.pieces===previousPieces+1&&!v.error&&!v.recoveryRequired){const job=new AbortController();this.#motion.set(index,job);lane.presentation={phase:'placing',before:lane.before};this.#emit();try{await Promise.race([Promise.resolve(this.#onPlacement(placementEvent(lane.before,v,{lane:index,generation:epoch,signal:job.signal}))),new Promise(r=>job.signal.addEventListener('abort',r,{once:true}))]);}catch{}finally{if(this.#motion.get(index)===job)this.#motion.delete(index);}if(epoch!==this.#epoch||lane!==this.#lanes[index])return;}
-    lane.presentation=null;lane.before=null;this.#finishPair();
+    lane.presentation=null;lane.before=null;if(lane.outcome)lane.timer.finish();else if(!this.#auto)lane.timer.pause();this.#finishPair();
     this.#emit();
   }
   async #loop(index, epoch) {
@@ -264,6 +268,7 @@ export class Comparison {
   #summary() {
     return freeze({ expectedPairs: this.#config.samples, observedPairs: this.#pairs.length,
       missingPairs: this.#config.samples - this.#pairs.length, pairs: [...this.#pairs],
+      pace:comparisonPace(this.#pairs,this.#lanes.map(l=>l.provider.name),{expectedPairs:this.#config.samples,complete:this.#pairs.length===this.#config.samples,archiveError:this.#archiveError}),
       scoreDifferenceRange: this.#pairs.length ? [Math.min(...this.#pairs.map(p => p.difference.score)), Math.max(...this.#pairs.map(p => p.difference.score))] : null,
       meaning: 'Descriptive player/assistance comparison. Capped/error runs are censored; no winner or model-quality inference.' });
   }

@@ -1,3 +1,4 @@
+import {RunClock} from './run-timing.mjs';
 import {GravityController} from './gravity-controller.mjs';
 import {gravityPolicy} from './ai-gravity.mjs';
 import {placementEvent,placementBeforeView,depth2Error} from './placement-motion.mjs';
@@ -44,19 +45,21 @@ let instance = 0;
 export class HumanVersus {
   #id = ++instance; #session = 0; #human; #revision = 0; #pieces = 0; #humanOutcome = null;
   #externalPolicy=null; #ai; #aiOutcome = null; #provider; #factory; #epoch = 0; #timer = null; #state = 'ready';
-  #clock; #gravity; #pieceCap; #paceMs; #onChange; #frames = []; #bytes = 0; #recording = false; #archiveError = null;
+  #runClock; #timedPieces=0; #clock; #gravity; #pieceCap; #paceMs; #onChange; #frames = []; #bytes = 0; #recording = false; #archiveError = null;
   #onPlacement; #presentation=null; #capture=false; #before=null; #motion=null; #algorithmElapsedMs = 0; #humanGravityMs = 0; #journal=null; #savedExport=null;
   #mode = 'live'; #replayLanes = []; #replayIndex = -1; #playback = false;
   constructor({ clock, gravity=false, pieceCap = 1000, paceMs = 500, providerFactory = () => heuristic(), onChange = () => {},onPlacement=null } = {}) {
     if (!Number.isInteger(pieceCap) || pieceCap < 1 || pieceCap > 1000 || !Number.isInteger(paceMs) || paceMs < 150 || paceMs > 1000) throw new RangeError('Bounded piece cap and algorithm pace required.');
     if(typeof gravity!=='boolean')throw new TypeError('Gravity must be on or off.');this.#clock=clock;this.#gravity=gravity;this.#pieceCap = pieceCap; this.#paceMs = paceMs; this.#factory = providerFactory; this.#onChange = onChange;this.#onPlacement=onPlacement; this.#setup();
   }
+  get timing(){return freeze({replay:this.#mode==='replay',lanes:[{lane:1,...this.#runClock.view,pieces:this.#timedPieces}]});}
   #setup() {
+    this.#runClock=new RunClock({now:this.#clock?.now??(()=>performance.now())});this.#timedPieces=0;
     this.#human = createGame(DEFAULT_SEED); this.#revision = 0; this.#pieces = 0;
     this.#humanOutcome = null; this.#aiOutcome = null; this.#provider = this.#factory();this.#externalPolicy=this.#provider.kind==='remote'?providerPolicy(this.#provider):null;
     if (!['local', 'mock', 'remote'].includes(this.#provider?.kind)) throw new Error('Only local or test-mock algorithms are supported.');
     const controller = new (this.#gravity?GravityController:Controller)({ seed: DEFAULT_SEED, sessionId: this.#provider.controllerBinding?.sessionId ?? `versus-${this.#id}-${this.#epoch}`,gameEpoch:this.#provider.kind==='remote'?this.#session:0,
-      provider: this.#provider,pieceCap:this.#pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: VERSUS_LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(1,input,view);}, onChange:view=>{if(this.#capture&&view.busy&&!this.#before){const before=this.#gravity?placementBeforeView(view):view;if(before){this.#before=before;this.#presentation={phase:before.status==='placing'?'placing':'choosing',before};}}if(this.#ai===controller)this.#emit();} });
+      provider: this.#provider,pieceCap:this.#pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: VERSUS_LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(1,input,view);}, onChange:view=>{if(this.#ai===controller){this.#runClock.record(view.lastDecision);this.#timedPieces=view.pieces;}if(this.#capture&&view.busy&&!this.#before){const before=this.#gravity?placementBeforeView(view):view;if(before){this.#before=before;this.#presentation={phase:before.status==='placing'?'placing':'choosing',before};}}if(this.#ai===controller)this.#emit();} });
     this.#ai = controller;
     this.#journal=(this.#provider.kind==='remote'||this.#gravity)?new DecisionJournal({mode:'versus',pieceCap:this.#pieceCap}):null;this.#savedExport=null;
     this.#journal?.addLane(0,'human',this.#humanView(),this.#policies()[0]);
@@ -69,7 +72,7 @@ export class HumanVersus {
       pieces: this.#pieces, player: { name: 'Human', kind: 'human', version: 'manual-focused-clock-1' },
       outcome: this.#humanOutcome, error: null, lastDecision: null, busy: false });
   }
-  #aiView() { return freeze({ ...this.#ai.view,presentation:this.#presentation,error:depth2Error(this.#provider,this.#ai.view.error,'versus'), status: this.#aiOutcome?.status ?? this.#ai.view.status, outcome: this.#aiOutcome }); }
+  #aiView() { return freeze({ ...this.#ai.view,presentation:this.#presentation,error:depth2Error(this.#provider,this.#ai.view.error,'versus'), status: this.#aiOutcome?.status ?? this.#ai.view.status, outcome: this.#aiOutcome,timing:this.#runClock.view }); }
   #policies() {
     return freeze([{ version: 'manual-focused-clock-1', kind: 'human', rulesVersion: RULES.version,
       timing: 'Real gravity in focused running play; independent of algorithm choosing; elapsed chunks at most250ms', pieceCap: this.#pieceCap },
@@ -91,6 +94,7 @@ export class HumanVersus {
     catch{this.#haltArchive();return false;}
   }
   #fence(stop = false) {
+    if(this.#aiOutcome)this.#runClock.finish();else this.#runClock.pause();
     this.#epoch++;this.#presentation=null;this.#capture=false;this.#before=null;this.#motion?.abort();this.#motion=null;this.#replayLanes=this.#replayLanes.map(l=>l?.presentation?freeze({...l,presentation:null}):l); this.#playback = false; clearTimeout(this.#timer); this.#timer = null;
     if (this.#human.status === 'playing') { const next=togglePause(this.#human);if(this.#recordHuman(next,{kind:stop?'stop':'pause'},{status:stop?'stopped':'paused'})){this.#human=next;this.#revision++;} }
     if (!this.#aiOutcome) this.#ai[stop ? 'stop' : 'pause']();
@@ -183,7 +187,7 @@ export class HumanVersus {
   }
   async #oneAI(epoch) {
     if (epoch !== this.#epoch || this.#aiOutcome || (this.#ai.view.busy||this.#motion) || !this.#capacity()) return;
-    const controller = this.#ai;
+    const controller = this.#ai;this.#runClock.start();
     this.#capture=!!this.#onPlacement;this.#before=null;const previousPieces=controller.view.pieces;
     const started = performance.now();
     await controller.step({ continueRunning: this.#state === 'running' });
@@ -194,7 +198,7 @@ export class HumanVersus {
     if (v.status === 'error' || v.status === 'over' || v.status === 'won' || v.pieces >= this.#pieceCap) this.#aiOutcome = this.#outcome(v);
     this.#record(1, this.#aiOutcome ? 'outcome' : 'placement');
     if(this.#onPlacement&&this.#before&&v.pieces===previousPieces+1&&!v.error&&!v.recoveryRequired){const job=new AbortController();this.#motion=job;this.#presentation={phase:'placing',before:this.#before};this.#emit();try{await Promise.race([Promise.resolve(this.#onPlacement(placementEvent(this.#before,v,{lane:1,generation:epoch,signal:job.signal}))),new Promise(r=>job.signal.addEventListener('abort',r,{once:true}))]);}catch{}finally{if(this.#motion===job)this.#motion=null;}if(epoch!==this.#epoch||controller!==this.#ai)return;}
-    this.#presentation=null;this.#before=null;this.#finish(); this.#emit();
+    this.#presentation=null;this.#before=null;if(this.#aiOutcome)this.#runClock.finish();else if(this.#state!=='running')this.#runClock.pause();this.#finish(); this.#emit();
   }
   async #runAI(epoch) {
     if (this.#mode !== 'live' || this.#state !== 'running' || epoch !== this.#epoch || this.#aiOutcome) return;
