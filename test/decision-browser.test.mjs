@@ -350,3 +350,23 @@ test('the observed 49th-turn failure replays as a verifiable forced placement wi
  const record=journal.exportRun({metadata:{accounting:a}});assert.equal(verifyDecisionUIRecord(record).ok,true);
  const forged=JSON.parse(record),first=forged.events.find(e=>e.input.kind==='gravity'&&e.input.selectedCandidateId);first.input.receipt={...first.input.receipt,...c.view.lastDecision.receipt,requestId:first.input.requestId,stateRevision:first.input.revision,selectedCandidateId:first.input.selectedCandidateId};assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(forged)),/exactly one legal candidate/);
 });
+
+test('session expiry during an upstream request is not reported as a decision timeout',async t=>{
+ const configuration=config();configuration.policy.expiresAt=Date.now()+1000;let release;
+ const f=await fixture(t,{configuration,fetchImpl:upstream({hold:()=>new Promise(r=>release=r)})});
+ try{await assert.rejects(f.service.decide(f.grant.capability,await packet()),{code:'session_expired'});const s=f.store.snapshot();assert.equal(s.browserSession.reason,'session_expired');assert.equal(Object.values(s.requests)[0].failure.public.code,'session_expired');assert.equal(s.used.attempts,1);}finally{release?.();await wait(0);}
+});
+
+for(const status of [400,503])test(`non-JSON HTTP ${status} preserves the HTTP failure instead of reporting invalid decision JSON`,async t=>{
+ const f=await fixture(t,{httpServer:true,fetchImpl:async()=>new Response('<html>Upstream error</html>',{status,headers:{'content-type':'text/html','x-request-id':'req_html_failure'}})});
+ await assert.rejects(f.bridge.decide(await packet()),error=>error.code==='provider_error'&&error.message.includes('HTTP '+status));const entry=Object.values(f.store.snapshot().requests)[0];assert.equal(entry.status,'rejected');assert.equal(entry.failure.public.status,status);assert.equal(entry.failure.public.requestId,'req_html_failure');assert.equal(f.store.snapshot().browserSession.ownerHold,true);
+});
+
+test('a malformed HTTP 200 remains an uncertain decision rather than a safe rejection',async t=>{
+ const f=await fixture(t,{fetchImpl:async()=>new Response('<html>Not a decision</html>',{status:200})});await assert.rejects(f.service.decide(f.grant.capability,await packet()),{code:'schema'});const s=f.store.snapshot();assert.equal(Object.values(s.requests)[0].status,'uncertain');assert.equal(s.browserSession.ownerHold,true);
+});
+
+test('a stale refusal diagnostic cannot mask a newer acknowledgement hold',async t=>{
+ const f=await fixture(t,{fetchImpl:upstream({refusal:true})});await assert.rejects(f.service.decide(f.grant.capability,await packet()),{code:'refusal'});const a=await f.service.control(f.grant.capability,'runStatus');assert.equal(a.lastFailure.code,'refusal');
+ for(const reason of ['completion_unacknowledged','request_interrupted']){const message=browserStatus({...a,reason,ownerHold:true,reconciliationRequired:true},f.grant.admission);assert.match(message,/interrupted/);assert.doesNotMatch(message,/declined/);}
+});
