@@ -112,15 +112,19 @@ for (const protocol of ['decisions', 'jev']) {
       const d = new Controller({ provider: bad }); await d.step(); assert.equal(d.view.pieces, 0); assert.equal(bad.lastReceipt.errorCode, 'model_mismatch');
     }
   });
-  test(`${protocol}: Reset then immediate Step, late ownership, deadline and sanitized errors`, async () => {
+  test(`${protocol}: Reset then immediate Step, late ownership, deadline and sanitized errors`, async t => {
     let calls = 0, late;
     const adapter = createChoiceAdapter({ protocol, transport: fixture(r => { calls++; if (calls === 1) return new Promise(resolve => { late = () => resolve(success(r, protocol)); }); return success(r, protocol); }) });
     const c = new Controller({ provider: adapter }); const old = c.step(); await delay(0); c.reset(); const fresh = c.step(); await Promise.all([old, fresh]);
     assert.equal(c.view.pieces, 1); const receipt = adapter.lastReceipt; late(); await delay(0); assert.equal(c.view.pieces, 1); assert.equal(adapter.lastReceipt, receipt);
     await c.step(); assert.equal(c.view.pieces, 2);
-    let aborted = false;
-    const hung = createChoiceAdapter({ protocol, config: { timeoutMs: 5 }, transport: fixture((r, { signal }) => { signal.addEventListener('abort', () => { aborted = true; }); return new Promise(() => {}); }) });
-    const d = new Controller({ provider: hung }); await d.step(); assert.equal(d.view.pieces, 0); assert.equal(hung.lastReceipt.errorCode, 'timeout'); assert(aborted);
+    let aborted = false,dispatched;const entered=new Promise(resolve=>{dispatched=resolve;});
+    const hung = createChoiceAdapter({ protocol, config: { timeoutMs: 1000 }, transport: fixture((r, { signal }) => { signal.addEventListener('abort', () => { aborted = true; });dispatched();return new Promise(() => {}); }) });
+    const d = new Controller({ provider: hung,deadlineMs:5000 });
+    t.mock.timers.enable({apis:['setTimeout']});
+    try{const pending=d.step();await entered;t.mock.timers.tick(1000);await pending;}
+    finally{t.mock.timers.reset();}
+    assert.equal(d.view.pieces, 0); assert.equal(hung.lastReceipt.errorCode, 'timeout'); assert.equal(hung.lastReceipt.attempts,1);assert(aborted);
     for (const [status, code] of [[401, 'authentication'], [404, 'unavailable'], [429, 'rate_limit'], [503, 'transport_ambiguous']]) {
       const bad = createChoiceAdapter({ protocol, transport: fixture(async () => ({ status, body: { message: 'secret-sentinel' } })) });
       const e = new Controller({ provider: bad }); await e.step(); assert.equal(bad.lastReceipt.errorCode, code); assert.equal(e.view.pieces, 0);

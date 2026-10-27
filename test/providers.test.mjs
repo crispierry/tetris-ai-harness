@@ -98,10 +98,15 @@ test('stale identities, unknown choices and extra fields cannot commit; returned
   const c = new Controller({ provider: a }); await c.step(); assert.equal(a.lastReceipt.errorCode, 'transport_ambiguous');
   assert(!JSON.stringify({ view: c.view, receipt: a.lastReceipt }).includes('secret-sentinel'));
 });
-test('deadline and cancellation suppress delayed transport completion with no late controller mutation', async () => {
-  let release, seenSignal;
-  const a = createAstraAdapter({ config: { ...ASTRA_CONFIG, timeoutMs: 10 }, transport: fixture((r, { signal }) => { seenSignal = signal; return new Promise(resolve => { release = () => resolve(success(r)); }); }) });
-  const c = new Controller({ provider: a, deadlineMs: 1000 }); await c.step();
+test('deadline and cancellation suppress delayed transport completion with no late controller mutation', async t => {
+  let release, seenSignal, dispatched;
+  const entered=new Promise(resolve=>{dispatched=resolve;});
+  const a = createAstraAdapter({ config: { ...ASTRA_CONFIG, timeoutMs: 1000 }, transport: fixture((r, { signal }) => { seenSignal = signal; dispatched(); return new Promise(resolve => { release = () => resolve(success(r)); }); }) });
+  const c = new Controller({ provider: a, deadlineMs: 5000 });
+  // Exercise timeout after dispatch, independent of machine-dependent request preparation.
+  t.mock.timers.enable({apis:['setTimeout']});
+  try { const pending=c.step();await entered;t.mock.timers.tick(1000);await pending; }
+  finally {t.mock.timers.reset();}
   assert.equal(a.lastReceipt.errorCode, 'timeout'); assert.equal(a.lastReceipt.attempts, 1); assert(seenSignal.aborted);
   release(); await delay(0); assert.equal(c.view.pieces, 0);
   let late; const b = createAstraAdapter({ transport: fixture(r => new Promise(resolve => { late = () => resolve(success(r)); })) });

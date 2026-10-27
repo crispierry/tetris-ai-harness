@@ -15,6 +15,7 @@ Reviewed the canonical engine and candidate contract, independent comparison con
 - Removed obsolete orchestration bootstrap state from the current tree and a machine-specific documentation reference. The package's old scaffold name and manual-only introduction are replaced.
 - Added an offline, read-only GitHub workflow, with official action releases pinned to commit hashes and checkout credential persistence disabled. It has no provider secrets, paid calls or deployment step.
 - Preserved three exact research exports with integrity manifests, canonical replay tests, failure explanations and dated Terra/Sol cost scenarios. Private owner ledgers, project settings and credentials are excluded.
+- The first Linux CI run exposed two timeout tests that assumed transport dispatch could always happen within 5–10 ms of starting request preparation. Production correctly expired before dispatch on the slower runner. Those tests now advance a controlled timer after a dispatch handshake, checking timeout, aborted transport and rejected late replies without weakening production deadlines.
 
 ## Maintained compatibility and deprecated code
 
