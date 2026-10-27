@@ -23,7 +23,7 @@ export function workedExamples() {
       explanation: 'The placed piece locks, then the next piece cannot spawn. This is game loss, distinct from a provider or controller error.' },
   ]);
 }
-export function briefing() {
+export function briefing({gravity=false}={}) {
   return freeze({ version: BRIEF_VERSION, rulesVersion: RULES.version, schemaVersion: VERSIONS.observation,
     assistanceTier: 'complete legal placements with canonical one-placement afterstates; no external lookahead',
     rules: RULES, geometry: GEOMETRY, examples: workedExamples(),
@@ -31,7 +31,7 @@ export function briefing() {
       `Board is ${RULES.width} columns by ${RULES.height} visible rows, with ${RULES.hiddenRows} hidden rows. Coordinates increase right and down from (0,0). Locked cells and active cells are separate.`,
       `Use ${RULES.rotation} rotation. Try horizontal offsets ${RULES.kicks.join(', ')} in order; no vertical kicks. No hold, counterclockwise turn, spin/combo scoring, ghost, or lock delay.`,
       'Left/right shift one column; soft drop moves down or locks immediately if blocked. Hard drop finds the last legal row and immediately locks. Complete rows are removed together; other rows collapse.',
-      `One through four lines score ${RULES.clearPoints.slice(1).join('/')} times the pre-clear level. Start at level ${RULES.startLevel}; level rises every ${RULES.linesPerLevel} lines, up to ${RULES.maxLevel}. Gravity is max(${RULES.minimumGravityMs}, floor(${RULES.gravityStartMs} × ${RULES.gravityFactor}^(level−1)))ms per row. Step-mode waiting freezes game time.`,
+      `One through four lines score ${RULES.clearPoints.slice(1).join('/')} times the pre-clear level. Start at level ${RULES.startLevel}; level rises every ${RULES.linesPerLevel} lines, up to ${RULES.maxLevel}. Gravity is max(${RULES.minimumGravityMs}, floor(${RULES.gravityStartMs} × ${RULES.gravityFactor}^(level−1)))ms per row. ${gravity?'Gravity continues while you choose. A late or unreachable choice is discarded; pieces can lock before your response.':'Step-mode waiting freezes game time.'}`,
       `Observe the next ${RULES.previewCount} pieces excluding the active piece. Seed/RNG and later future are private. Hypothetical afterstates show the original remaining preview, never a new sixth piece. A winning clear retains all five original next pieces because no spawn or refill occurs.`,
       'Marathon: clear 300 lines. Complete the entire clear and score at the pre-clear level, then stop before spawning or refilling. Keep overshoot lines and the final settled board; maximum level is 30. Blocked next spawn is a game loss. Timeout, cancellation, errors and a placement safety cap are separate outcomes, never wins.',
       'Choose exactly one supplied legal candidate ID. Each includes orientation, four occupied cells, bounds, executable path and exact consequences. The executor revalidates and performs that path; you cannot invent moves or select another piece.',
@@ -45,11 +45,11 @@ function ensurePublic(value) {
     ensurePublic(item);
   }
 }
-export function instructionPacket(observation, candidates, { requestId, deadlineMs } = {}) {
+export function instructionPacket(observation, candidates, { requestId, deadlineMs, gravity=false } = {}) {
   if (typeof requestId !== 'string' || !requestId || requestId.length > 200 || !Number.isInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 60000 || !candidates.length) throw new TypeError('Bounded request and candidates required');
   if (new Set(candidates.map(c => c.id)).size !== candidates.length || candidates.some(c => c.sessionId !== observation.sessionId || c.revision !== observation.revision || c.rulesVersion !== observation.rulesVersion)) throw new Error('Candidate packet binding mismatch');
   const packet = { schemaVersion: VERSIONS.decision, requestId, stateRevision: observation.revision, observation,
-    rulesBrief: briefing(), objective: observation.objective, candidates,
+    rulesBrief: briefing({gravity}), objective: observation.objective, candidates,
     deadlineMs, responseInstructions: CONTROLLER_RESPONSE_INSTRUCTIONS, responseSchema: { type: 'object', additionalProperties: false,
       properties: { requestId: { type: 'string', const: requestId }, stateRevision: { type: 'integer', const: observation.revision },
         selectedCandidateId: { type: 'string', enum: candidates.map(c => c.id) } },

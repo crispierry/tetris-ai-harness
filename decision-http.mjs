@@ -34,11 +34,11 @@ export function createDecisionHandler({ service, host, origin, owner } = {}) {
       }
       const cap = request.headers['x-decision-capability'];
       if (request.url === '/decision/choice') {
-        if (Object.keys(body).length !== 1 || !Object.hasOwn(body,'packet')) { send(400,{error:'input'}); return true; }
-        send(200,await service.decide(cap,body.packet,{signal:abort.signal}));
+        if (Object.keys(body).some(k=>!['packet',...(service.browserRisk?['gravity']:[])].includes(k)) || !Object.hasOwn(body,'packet') || (Object.hasOwn(body,'gravity')&&body.gravity!==true)) { send(400,{error:'input'}); return true; }
+        send(200,await service.decide(cap,body.packet,{signal:abort.signal,gravity:body.gravity===true}));
       } else {
-        if (Object.keys(body).some(k => !['action','epoch',...(service.browserRisk?['requestId']:[])].includes(k)) || (Object.hasOwn(body,'requestId')&&!['acceptDecision','interrupt'].includes(body.action))) { send(400,{error:'input'}); return true; }
-        send(200,await service.control(cap,body.action,body.epoch,service.browserRisk?{requestId:body.requestId}:undefined));
+        if ((['proof','observation'].some(k=>Object.hasOwn(body,k))&&body.action!=='settleGravity') || Object.keys(body).some(k => !['action','epoch',...(service.browserRisk?['requestId','proof','observation']:[])].includes(k)) || (Object.hasOwn(body,'requestId')&&!['acceptDecision','interrupt','settleGravity'].includes(body.action))) { send(400,{error:'input'}); return true; }
+        send(200,await service.control(cap,body.action,body.epoch,service.browserRisk?{requestId:body.requestId,proof:body.proof,observation:body.observation}:undefined));
       }
     } catch (e) { send(e.code === 'unauthorized' ? 403 : 400,{error:codes.has(e.code) ? e.code : 'unavailable'}); }
     finally { request.off('aborted',disconnect); request.off('error',disconnect); response.off('close',responseClose); }

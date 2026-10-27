@@ -7,7 +7,7 @@ import { providerFor } from './comparison.mjs';
 import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail, formatNumber } from './marathon.mjs';
 import { HumanVersus } from './versus.mjs';
 import { GEOMETRY } from './harness.mjs';
-const STATUS = { placing:'Placing…',ready: 'Ready', playing: 'Playing', running: 'Running', choosing: 'Choosing…', paused: 'Paused',
+const STATUS = { falling:'Falling', placing:'Placing…',ready: 'Ready', playing: 'Playing', running: 'Running', choosing: 'Choosing…', paused: 'Paused',
   stopped: 'Stopped', over: 'Game over', error: 'Error', completed: 'Run finished', won: MARATHON_COPY.complete, capped: 'Capped', replay: 'Saved replay' };
 const KEYS = { arrowleft: 'left', arrowright: 'right', arrowdown: 'down', arrowup: 'rotate', x: 'rotate', ' ': 'drop' };
 function download(json, doc) {
@@ -27,6 +27,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     const costLane=view.lanes[1];if(costLane)updateCost({gameId:costLane.observation.sessionId,receipt:costLane.lastDecision?.receipt,error:!!costLane.error,busy:costLane.status==='choosing',replay:view.mode==='replay',openAI:$('v-provider')?.value==='openai',tracked:view.policies?.[1]?.kind==='externalDecisions'});
     $('v-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     if($('v-provider'))$('v-provider').disabled=view.frameCount>0;
+    if($('v-gravity'))$('v-gravity').disabled=view.frameCount>0;
     const depth=$('v-depth');if(depth){depth.disabled=view.frameCount>0||$('v-provider')?.value!=='lookahead';if(depth.parentNode)depth.parentNode.hidden=$('v-provider')?.value!=='lookahead';}
     const pendingOpenAI=view.mode!=='replay'&&!!pairing&&$('v-provider')?.value==='openai'&&pairing.session.state.state!=='connected';
     if($('v-1-heading'))text('v-1-heading',pendingOpenAI?'OpenAI Decisions':compactPlayerName(view.lanes[1].player.name));
@@ -51,7 +52,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
       if(view.mode!=='replay')pairing?.observe(canonical.lastDecision?.receipt);
       const p=canonical.error||canonical.recoveryRequired?null:canonical.presentation,lane=p?{...p.before,status:p.phase==='placing'?'placing':'choosing',observation:visual??p.before.observation}:canonical;
       const prefix = `v-${i}-`, obs = lane.observation;
-      text(prefix + 'status', STATUS[lane.status]);
+      text(prefix + 'status', lane.status==='falling'&&lane.missedChoice?'Falling · missed choice':STATUS[lane.status]);
       for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
@@ -86,9 +87,10 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   }
   const runner = runnerFactory({ onChange: render,onPlacement:event=>presenter.play(event) });
   const select=$('v-provider'),depth=$('v-depth');if(depth&&!/^[1-6]$/.test(depth.value))depth.value='2';let pairing;
-  const configure=()=>{if(select.value==='openai'&&pairing?.session.state.state!=='connected'){render(runner.view);return;}runner.configure(()=>select.value==='openai'?pairing.session.provider:providerFor(select.value,{depth:Number(depth?.value??2),nodeCap:4000,timeMs:500}));$('v-message').hidden=true;text('v-message','');};
+  const configure=()=>{if(select.value==='openai'&&pairing?.session.state.state!=='connected'){render(runner.view);return;}runner.configure(()=>select.value==='openai'?pairing.session.provider:providerFor(select.value,{depth:Number(depth?.value??2),nodeCap:4000,timeMs:500}),{gravity:$('v-gravity')?.checked===true});$('v-message').hidden=true;text('v-message','');};
   pairing=mountDecisionPairing(doc,{mode:'versus',lane:'algorithm',window:win,onAvailabilityChange:()=>render(runner.view),beforeConnect:()=>{if(select.value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if(select?.value==='openai'){try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}}}});
   select?.addEventListener('change',()=>{pairing?.setEnabled(select.value==='openai');try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}});
+  $('v-gravity')?.addEventListener('change',()=>{try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);}});
   depth?.addEventListener('change',()=>{try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);}});
   pairing?.setEnabled(false);
   const act = fn => async () => { try { $('v-message').hidden = true; text('v-message', ''); await fn();await pairing?.refresh(); } catch (error) { $('v-message').hidden = false; text('v-message', error.message); } };
@@ -119,7 +121,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const dispose = () => { if(disposed)return;disposed = true; win.cancelAnimationFrame(frameHandle);presenter.dispose(); runner.dispose();void pairing?.session.close().catch(()=>{}); };
   win.addEventListener('pagehide',event=>{if(event?.persisted){pause();presenter.cancel();win.cancelAnimationFrame(frameHandle);frameHandle=null;}else dispose();});
   win.addEventListener('pageshow',event=>{if(event.persisted&&!disposed&&frameHandle===null){lastFrame=null;frameHandle=win.requestAnimationFrame(frame);}});
-  if(select?.value==='lookahead')configure();else render(runner.view); frameHandle = win.requestAnimationFrame(frame);
+  if(select?.value==='lookahead'||$('v-gravity')?.checked)configure();else render(runner.view); frameHandle = win.requestAnimationFrame(frame);
   return { runner, dispose };
 }
 if (typeof document !== 'undefined' && typeof window !== 'undefined') mountVersus(document, { window });

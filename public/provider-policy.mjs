@@ -15,7 +15,7 @@ export function providerPolicy(provider) {
 }
 export function compactReceipt(receipt) {
  if(!receipt)return null;
- if(receipt.version==='decision-browser-receipt-1'){if(!validBrowserReceipt(receipt)||size(receipt)>4096)throw new Error('Invalid browser compact receipt');return freeze(JSON.parse(JSON.stringify(receipt)));}
+ if(['decision-browser-receipt-1','decision-browser-gravity-receipt-1'].includes(receipt.version)){if(!validBrowserReceipt(receipt)||size(receipt)>4096)throw new Error('Invalid browser compact receipt');return freeze(JSON.parse(JSON.stringify(receipt)));}
  const allowed=['version','provider','requestedModel','observedModel','requestLatencyMs','completions','placements','actualExternalCalls','remainingAllowance','completedResponses','mode','runId','laneId','epoch','lineage','policyDigest','usage','estimatedReservationMicros','reservedInputTokens','requestId','stateRevision','selectedCandidateId','attempts','actualCostUSD','usageProvenance'];
  if(receipt.version!=='decision-receipt-2' || Object.keys(receipt).some(k=>!allowed.includes(k)) || !['http-fixture','live'].includes(receipt.mode) || receipt.provider!=='OpenAI' || receipt.requestedModel!=='gpt-6-luna' || !Number.isFinite(receipt.requestLatencyMs) || receipt.requestLatencyMs<0 || !['attempts','completedResponses','completions','placements'].every(k=>Number.isInteger(receipt[k])&&receipt[k]>=0&&receipt[k]<=1) || size(receipt)>4096)throw new Error('Invalid compact receipt.');
  return freeze(JSON.parse(JSON.stringify(receipt)));
@@ -24,7 +24,7 @@ export function compactReceipt(receipt) {
 // Local lookahead receipts are public bounded search accounting, not Decisions receipts.
 export function localSearchReceipt(receipt) {
  if(!receipt)return null;
- if(receipt.version==='decision-browser-receipt-1'){if(!validBrowserReceipt(receipt)||size(receipt)>4096)throw new Error('Invalid browser compact receipt');return freeze(JSON.parse(JSON.stringify(receipt)));}
+ if(['decision-browser-receipt-1','decision-browser-gravity-receipt-1'].includes(receipt.version)){if(!validBrowserReceipt(receipt)||size(receipt)>4096)throw new Error('Invalid browser compact receipt');return freeze(JSON.parse(JSON.stringify(receipt)));}
  const stats=['nodes','evaluatorCalls','rootsOffered','rootsCompleted','childrenEnumerated','leavesEvaluated','pruned','elapsedMs','depthRequested','depthReached','selectedDepth','beamWidth','expandedStates','earlyTerminal'];
  if(typeof receipt.requestId!=='string' || receipt.requestId.length>200 || !receipt.search || Object.keys(receipt.search).some(k=>!stats.includes(k)) || Object.values(receipt.search).some(v=>!Number.isFinite(v)||v<0))throw new Error('Invalid local search receipt.');
  const result={requestId:receipt.requestId,errorCode:receipt.errorCode,search:receipt.search,usage:null,actualCostUSD:null,provenance:'Local/mock leaf evaluations; no live model calls'};

@@ -68,3 +68,10 @@
 .provider-connections .decision-pairing>h3{display:block;color:var(--muted);margin-block-start:12px}
 
 .replay-notice{font-size:.8125rem;color:var(--accent);margin:8px 0}
+
+.control-rail .gravity-toggle,.mobile-control-slot .gravity-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;min-block-size:44px;margin:0;color:var(--text,#f0f3f5);font-size:.8125rem;font-weight:500;cursor:pointer}
+.arcade-shell .gravity-toggle input{appearance:none;position:relative;display:block;inline-size:36px;min-inline-size:36px;block-size:22px;min-block-size:22px;margin:0;padding:0;border:1px solid #71829a;border-radius:20px;background:#263243;cursor:pointer}
+.arcade-shell .gravity-toggle input::after{content:"";position:absolute;inset-block-start:3px;inset-inline-start:3px;inline-size:14px;block-size:14px;border-radius:50%;background:#f0f3f5}
+.arcade-shell .gravity-toggle input:checked{background:#23745e;border-color:#84d9bd}.arcade-shell .gravity-toggle input:checked::after{inset-inline-start:17px}
+.arcade-shell .gravity-toggle:has(input:disabled){color:var(--muted);cursor:default}.arcade-shell .gravity-toggle input:disabled{cursor:default;opacity:.7}
+@media(max-width:960px){.mobile-control-slot .gravity-toggle{grid-column:1/-1;justify-content:flex-start;min-block-size:32px}.mobile-control-slot .gravity-toggle input{margin-inline-start:auto}}

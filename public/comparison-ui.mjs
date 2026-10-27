@@ -9,7 +9,7 @@ import { Comparison, DEFAULT_CONFIG, validateConfig } from './comparison.mjs';
 import { GEOMETRY } from './harness.mjs';
 import { briefing } from './briefing.mjs';
 
-const STATUS = { queued:'Waiting…', placing:'Placing…',ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
+const STATUS = { falling:'Falling', queued:'Waiting…', placing:'Placing…',ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
   over: 'Game over', error: 'Error', completed: 'Run finished', won: MARATHON_COPY.complete, capped: 'Capped', replay: 'Saved replay' };
 const SETTINGS = Object.keys(DEFAULT_CONFIG);
 function download(json, doc) {
@@ -54,7 +54,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       const prefix = `c-${index}-`, obs = lane.observation;
       text(prefix + 'heading',pendingOpenAI(index)?'OpenAI Decisions':compactPlayerName(lane.player.name));
       $(prefix+'heading').title=lane.player.name;
-      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: pendingOpenAI(index) })} · ${lane.assistance}`);
+      text(prefix + 'status', lane.status==='falling'&&lane.missedChoice?'Falling · missed choice':STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: pendingOpenAI(index) })} · ${lane.assistance}`);
       if(pendingOpenAI(index))text(prefix+'tier',pairings[index]?.session.state.message??'Connect to request local owner approval.');
       for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
@@ -92,7 +92,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   }
   let pairings=[];
   const comparison = comparisonFactory({onChange:render,onPlacement:event=>presenters[event.lane].play(event),providerFactory:(key,config,{lane})=>key==='openai'?pairings[lane].session.provider:providerFor(key,config)});
-  const settings=()=>Object.fromEntries(SETTINGS.map(key=>[key,['left','right'].includes(key)?$('c-'+key).value:Number($('c-'+key).value)]));
+  const settings=()=>Object.fromEntries(SETTINGS.map(key=>[key,key==='gravity'?$('c-gravity').checked===true:['left','right'].includes(key)?$('c-'+key).value:Number($('c-'+key).value)]));
   const ready=()=>['left','right'].every((side,i)=>settings()[side]!=='openai'||pairings[i]?.session.state.state==='connected');
   pairings=['left','right'].map((side,index)=>mountDecisionPairing(doc,{mode:'comparison',lane:side,window:win,rootId:index?'decision-pairing':'decision-pairing-left',manageBudget:false,title:`${index?'Right':'Left'} · OpenAI`,connectLabel:index?'Connect OpenAI':'Connect left OpenAI',onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings()[side]!=='openai')throw new Error(`Select OpenAI on the ${side} before connecting.`);},onConnected:()=>{try{if(ready())comparison.configure(settings());else render(comparison.view);$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}}));
   const refresh=()=>Promise.all(pairings.map(p=>p?.refresh()));

@@ -29,12 +29,12 @@ test('presenter shows intermediate legal rows, reduced motion settles immediatel
 });
 
 test('comparison postcommit gate captures first spawned piece, independently paces lanes and Pause settles committed state',async()=>{
- const events=[],gates=[],calls=[0,0],base=heuristic();const c=new Comparison({config:{left:'local',right:'local',pieceCap:3,paceMs:30},providerFactory:(key,config,{lane})=>({...base,async decide(p){calls[lane]++;return base.decide(p);}}),onPlacement:e=>{events.push(e);return new Promise(r=>gates[e.lane]=r);}});
+ const events=[],gates=[],calls=[0,0],base=heuristic();const c=new Comparison({config:{gravity:false,left:'local',right:'local',pieceCap:3,paceMs:30},providerFactory:(key,config,{lane})=>({...base,async decide(p){calls[lane]++;return base.decide(p);}}),onPlacement:e=>{events.push(e);return new Promise(r=>gates[e.lane]=r);}});
  const step=c.step();await until(()=>events.length===2);assert(events.every(e=>e.beforeObservation.active));assert(c.view.lanes.every(l=>l.pieces===1&&l.presentation.phase==='placing'));assert.equal(c.view.busy,true);await c.step();assert.deepEqual(calls,[1,1]);const exported=c.exportRun();c.pause();await step;assert(c.view.lanes.every(l=>l.pieces===1&&!l.presentation));gates.forEach(r=>r());await wait(0);assert(c.view.lanes.every(l=>l.pieces===1));assert.equal(c.exportRun(),exported);c.reset();assert(c.view.lanes.every(l=>l.pieces===0&&!l.presentation));c.dispose();
 });
 
 test('comparison fast lane advances after its presenter while the peer remains gated; reset fences both',async()=>{
- const base=heuristic(),calls=[0,0],gates=[];const c=new Comparison({config:{left:'local',right:'local',pieceCap:3,paceMs:30},providerFactory:(key,config,{lane})=>({...base,async decide(p){calls[lane]++;return base.decide(p);}}),onPlacement:e=>e.lane===1?new Promise(r=>gates.push(r)):Promise.resolve()});c.start();await until(()=>calls[0]>=2);assert.equal(calls[1],1);assert.equal(c.view.lanes[1].presentation.phase,'placing');c.reset();const fresh=c.view;gates.forEach(r=>r());await wait(50);assert.deepEqual(c.view,fresh);c.dispose();
+ const base=heuristic(),calls=[0,0],gates=[];const c=new Comparison({config:{gravity:false,left:'local',right:'local',pieceCap:3,paceMs:30},providerFactory:(key,config,{lane})=>({...base,async decide(p){calls[lane]++;return base.decide(p);}}),onPlacement:e=>e.lane===1?new Promise(r=>gates.push(r)):Promise.resolve()});c.start();await until(()=>calls[0]>=2);assert.equal(calls[1],1);assert.equal(c.view.lanes[1].presentation.phase,'placing');c.reset();const fresh=c.view;gates.forEach(r=>r());await wait(50);assert.deepEqual(c.view,fresh);c.dispose();
 });
 
 test('versus human gravity/input remain independent during algorithm Placing and replay uses no chooser or changed export',async()=>{
@@ -47,16 +47,16 @@ test('actual provider confirmation completes before facade animation starts; fri
 
 
 test('Pause during a terminal placement finishes the pair once without duplicate placements or choices',async()=>{
- const gates=[],base=heuristic();let calls=0;const c=new Comparison({config:{left:'local',right:'local',pieceCap:1},providerFactory:()=>({...base,async decide(p){calls++;return base.decide(p);}}),onPlacement:e=>new Promise(r=>gates[e.lane]=r)});const step=c.step();await until(()=>gates.length===2&&gates.every(Boolean));assert(c.view.lanes.every(l=>l.outcome.status==='capped'));c.pause();await step;assert.equal(c.view.summary.observedPairs,1);assert.equal(c.view.summary.pairs.length,1);await c.step();assert.equal(calls,2);assert.equal(JSON.parse(c.exportRun()).frames.filter(f=>f.event==='outcome').length,2);gates.forEach(r=>r());c.dispose();
+ const gates=[],base=heuristic();let calls=0;const c=new Comparison({config:{gravity:false,left:'local',right:'local',pieceCap:1},providerFactory:()=>({...base,async decide(p){calls++;return base.decide(p);}}),onPlacement:e=>new Promise(r=>gates[e.lane]=r)});const step=c.step();await until(()=>gates.length===2&&gates.every(Boolean));assert(c.view.lanes.every(l=>l.outcome.status==='capped'));c.pause();await step;assert.equal(c.view.summary.observedPairs,1);assert.equal(c.view.summary.pairs.length,1);await c.step();assert.equal(calls,2);assert.equal(JSON.parse(c.exportRun()).frames.filter(f=>f.event==='outcome').length,2);gates.forEach(r=>r());c.dispose();
 });
 
 test('replay Pause settles the saved committed frame and generation fences its old presenter',async()=>{
- const gates=[],c=new Comparison({config:{left:'local',right:'local',pieceCap:3,paceMs:30},onPlacement:e=>e.replay?new Promise(r=>gates.push(r)):Promise.resolve()});await c.step();await c.step();const json=c.exportRun();c.replay();c.pause();for(let i=0;i<3;i++)await c.step();const playing=c.step();await until(()=>gates.length>0);assert.equal(c.view.busy,true);c.pause();await playing;assert(c.view.lanes.every(l=>!l.presentation));assert.equal(c.view.busy,false);const current=c.view;gates.forEach(r=>r());await wait(0);assert.deepEqual(c.view,current);assert.equal(c.exportRun(),json);c.dispose();
+ const gates=[],c=new Comparison({config:{gravity:false,left:'local',right:'local',pieceCap:3,paceMs:30},onPlacement:e=>e.replay?new Promise(r=>gates.push(r)):Promise.resolve()});await c.step();await c.step();const json=c.exportRun();c.replay();c.pause();for(let i=0;i<3;i++)await c.step();const playing=c.step();await until(()=>gates.length>0);assert.equal(c.view.busy,true);c.pause();await playing;assert(c.view.lanes.every(l=>!l.presentation));assert.equal(c.view.busy,false);const current=c.view;gates.forEach(r=>r());await wait(0);assert.deepEqual(c.view,current);assert.equal(c.exportRun(),json);c.dispose();
 });
 
 
 test('entering replay during terminal motion freezes the exact earlier exported bytes',async()=>{
- const gates=[],c=new Comparison({config:{left:'local',right:'local',pieceCap:1},onPlacement:e=>new Promise(r=>gates[e.lane]=r)});const step=c.step();await until(()=>gates.length===2&&gates.every(Boolean));const original=c.exportRun();c.replay();await step;c.pause();assert.equal(c.exportRun(),original);gates.forEach(r=>r());c.dispose();
+ const gates=[],c=new Comparison({config:{gravity:false,left:'local',right:'local',pieceCap:1},onPlacement:e=>new Promise(r=>gates[e.lane]=r)});const step=c.step();await until(()=>gates.length===2&&gates.every(Boolean));const original=c.exportRun();c.replay();await step;c.pause();assert.equal(c.exportRun(),original);gates.forEach(r=>r());c.dispose();
 });
 
 test('search limit errors identify depth6 and stale search metadata cannot invent a new error',()=>{const p={runMetadata:{search:{depth:6,version:'visible-beam-search-1'}},lastSearch:{error:{code:'timeout',reason:'time budget'}}};assert.match(depth2Error(p,'raw','comparison'),/Depth 6/);assert.match(depth2Error(p,'raw','solo'),/lower the depth/);assert.equal(depth2Error(p,null,'comparison'),null);});

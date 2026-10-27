@@ -1,3 +1,7 @@
+import {instructionPacket} from '../public/briefing.mjs';
+import {GravityController} from '../public/gravity-controller.mjs';
+import {gravityPolicy} from '../public/ai-gravity.mjs';
+import {fakeClock} from './helpers/fake-clock.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -160,7 +164,7 @@ test('mounted browser comparison Start survives concurrent status refresh and co
  }finally{mounted.dispose();await Promise.allSettled(pagehide.map(fn=>fn()));globalThis.fetch=oldFetch;if(oldAdd)globalThis.addEventListener=oldAdd;else delete globalThis.addEventListener;}
 });
 test('all three actual browser-provider exporters verify canonical receipts/nulls/privacy; Connect stays paused with persistent risk line; replay zero calls',async t=>{
- let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})});const c=new Comparison({config:{right:'openai',pieceCap:2},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});await c.step();let json=c.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);assert.equal(JSON.parse(json).metadata.accounting[0].actualCostUSD,null);assert.match(providerProvenance(providerPolicy(f.bridge)),/^Owner-approved live OpenAI/);const before=calls;c.replay();c.pause();await c.step();assert.equal(calls,before);assert.equal(c.exportRun(),json);c.dispose();
+ let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})});const c=new Comparison({config:{gravity:false,right:'openai',pieceCap:2},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});await c.step();let json=c.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);assert.equal(JSON.parse(json).metadata.accounting[0].actualCostUSD,null);assert.match(providerProvenance(providerPolicy(f.bridge)),/^Owner-approved live OpenAI/);const before=calls;c.replay();c.pause();await c.step();assert.equal(calls,before);assert.equal(c.exportRun(),json);c.dispose();
  const g=await fixture(t,{httpServer:true});const v=new HumanVersus({providerFactory:()=>g.bridge});await v.stepAlgorithm();v.start();v.tick(20);v.input('drop');v.pause();await settle(()=>!v.view.busy);json=v.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);v.dispose();
  const h=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})}),oldFetch=globalThis.fetch,nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
  globalThis.fetch=async(route,o={})=>{const response=await oldFetch(h.origin+route,{...o,headers:{origin:h.origin,...o.headers}});if(route==='/decision/pair/register'&&response.ok){const challenge=await response.clone().json(),body=JSON.parse(o.body);await h.owner.command({action:'approve',challengeId:challenge.challengeId,...body});}return response;};
@@ -221,7 +225,7 @@ test('browser held recovery copy refers to authenticated provider status while s
 });
 
 for(const local of ['local','look1','look2','lookahead','delay','error'])for(const side of [0,1])test(`${local} can oppose live-shaped OpenAI on either side (${side}) with canonical export and zero-call replay`,async t=>{
- let calls=0;const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})}),config={left:side===0?'openai':local,right:side===1?'openai':local,leftDepth:6,rightDepth:6,pieceCap:1,timeMs:1000},c=new Comparison({config,providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
+ let calls=0;const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})}),config={left:side===0?'openai':local,right:side===1?'openai':local,leftDepth:6,rightDepth:6,pieceCap:1,timeMs:1000},c=new Comparison({config:{gravity:false,...config},providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
  try{
   await c.step();assert.equal(c.view.lanes[side].pieces,1);assert.equal(c.view.lanes[1-side].pieces,local==='error'?0:1);assert.equal(calls,1);
   const json=c.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);
@@ -234,7 +238,7 @@ for(const local of ['local','look1','look2','lookahead','delay','error'])for(con
 test('two OpenAI lanes use separate grants and serialize actual upstreams without overlap, then retain two-sample canonical history',async t=>{
  let active=0,calls=0;const f=await fixture(t,{fetchImpl:upstream({inspect:()=>{assert.equal(active,0);active++;calls++;},hold:async()=>{await wait(20);active--;}})});
  const run=await f.service.owner.issueRun({laneId:'second',controllerSessionBase:'second'}),grant={...run,admission:await f.service.control(run.capability,'runStatus')},second=createDecisionBridge({grant,fetchImpl:f.fetchHTTP});
- const c=new Comparison({config:{left:'openai',right:'openai',samples:2,pieceCap:1},providerFactory:(key,settings,{lane})=>lane?second:f.bridge});
+ const c=new Comparison({config:{gravity:false,left:'openai',right:'openai',samples:2,pieceCap:1},providerFactory:(key,settings,{lane})=>lane?second:f.bridge});
  try{
   await c.step();assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(calls,2);assert.equal(f.store.snapshot().browserSession.ownerHold,false);
   await c.step();assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(calls,4);assert.equal(f.store.snapshot().used.attempts,4);const json=c.exportRun(),r=JSON.parse(json);assert.equal(r.version,'decision-ui-comparison-series-1');assert.equal(r.records.length,2);assert.equal(verifyDecisionUIRecord(json).samples,2);
@@ -246,7 +250,7 @@ test('two OpenAI lanes use separate grants and serialize actual upstreams withou
 
 test('cancelling a pair with one queued paid lane never dispatches that lane or clears the first lane hold',async t=>{
  let release,entered,calls=0;const waiting=new Promise(r=>entered=r),f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++,hold:()=>new Promise(r=>{release=r;entered();})})});
- const run=await f.service.owner.issueRun({laneId:'queued',controllerSessionBase:'queued'}),second=createDecisionBridge({grant:{...run,admission:await f.service.control(run.capability,'runStatus')},fetchImpl:f.fetchHTTP}),c=new Comparison({config:{left:'openai',right:'openai'},providerFactory:(key,settings,{lane})=>lane?second:f.bridge});
+ const run=await f.service.owner.issueRun({laneId:'queued',controllerSessionBase:'queued'}),second=createDecisionBridge({grant:{...run,admission:await f.service.control(run.capability,'runStatus')},fetchImpl:f.fetchHTTP}),c=new Comparison({config:{gravity:false,left:'openai',right:'openai'},providerFactory:(key,settings,{lane})=>lane?second:f.bridge});
  try{const work=c.step();await waiting;assert.equal(c.view.lanes[1].status,'queued');c.pause();release();await work;await settle(()=>f.store.snapshot().browserSession.ownerHold);assert.equal(calls,1);assert.equal(c.view.lanes[1].pieces,0);assert.equal(f.store.snapshot().used.attempts,1);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);}finally{release?.();c.dispose();await second.close();}
 });
 
@@ -262,4 +266,42 @@ test('actual selectors independently pair both OpenAI lanes and keep lookahead s
   await $('c-step').trigger('click');assert.equal(calls,4);assert.match($('decision-cost').textContent,/0\.0004/);assert.equal(verifyDecisionUIRecord(c.exportRun()).samples,2);
   await $('c-reset').trigger('click');$('c-left').value='look2';await $('c-left').trigger('change');assert.equal($('c-nodeCap').disabled,false);assert.equal($('c-timeMs').disabled,false);assert.equal($('c-start').disabled,false);
  }finally{c.dispose();globalThis.fetch=original;}
+});
+
+
+test('real-gravity browser choice settles its actual fall through HTTP, supports paused poses and preserves $1 accounting',async t=>{
+ let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})}),clock=fakeClock();let journal;
+ const c=new GravityController({sessionId:'browser',provider:f.bridge,clock,onTransition:({input,view})=>journal.append(0,input,view)});
+ journal=new DecisionJournal({mode:'solo'});journal.addLane(0,'computer',c.view,gravityPolicy(providerPolicy(f.bridge)));
+ const first=c.step();await settle(()=>c.view.status==='falling');assert.equal(calls,1);assert.equal(c.view.pieces,0);assert.equal(f.bridge.lastReceipt.placements,0);
+ await clock.advance(850);assert.equal(c.view.observation.active.y,1);c.pause();await first;
+ assert.equal(c.view.status,'paused');assert.equal(c.view.pieces,0);assert.equal(clock.size,0);let status=await f.bridge.status();assert.equal(status.ownerHold,false);assert.equal(status.placements,0);assert.deepEqual(status.spendControl,{configuredProjectLimitUSD:1,enforcementDelayOvershoot:'unquantified',riskAccepted:true});
+ assert.equal(verifyDecisionUIRecord(journal.exportRun({metadata:{accounting:status}})).ok,true);
+ const second=c.step();await settle(()=>c.view.status==='falling');await clock.advance(16000);await second;assert.equal(c.view.pieces,1);assert.equal(calls,2);
+ status=await f.bridge.status();assert.equal(status.placements,1);assert.equal(status.attempts,2);assert.equal(status.ownerHold,false);const json=journal.exportRun({metadata:{accounting:status}});assert.equal(verifyDecisionUIRecord(json).ok,true);
+ const record=JSON.parse(json),settled=record.events.find(e=>e.input.kind==='gravity');await assert.rejects(f.service.control(f.grant.capability,'settleGravity',undefined,{requestId:settled.input.requestId,proof:settled.input.proof,observation:settled.observation}));assert.equal((await f.bridge.status()).placements,1);record.events.find(e=>e.input.kind==='gravity').input.proof.trace[0].choiceId='invented';assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(record)));
+ for(const secret of [dummy,fingerprint,'proj_dummy_browser'])assert(!json.includes(secret));
+});
+
+test('gravity settlement rejects forged actual state and replay without changing ledger counts',async t=>{
+ const f=await fixture(t,{httpServer:true}),original=await packet(),p=instructionPacket(original.observation,original.candidates,{requestId:original.requestId,deadlineMs:original.deadlineMs,gravity:true}),r=await f.service.decide(f.grant.capability,p,{gravity:true});
+ assert.equal(r.receipt.placements,0);await assert.rejects(f.service.control(f.grant.capability,'acceptDecision',undefined,{requestId:r.choice.requestId}));
+ const body={requestId:r.choice.requestId,proof:{version:'ai-gravity-turn-1',placementLimit:1,reveals:[],trace:[{choiceId:r.choice.selectedCandidateId},{waitMs:16000}]},observation:{}};
+ await assert.rejects(f.service.control(f.grant.capability,'settleGravity',undefined,body));const s=await f.store.inspect();assert.equal(s.used.attempts,1);assert.equal(Object.values(s.runs)[0].placements,0);assert.equal(Object.values(s.requests)[0].deliveryPending,true);
+});
+
+test('both gravity-enabled OpenAI boards fall while choices alone share the one-request lane',async t=>{
+ let calls=0,release,entered;const gate=new Promise(r=>entered=r),f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++,hold:async()=>{if(calls===1){entered();await new Promise(r=>release=r);}}})}),clock=fakeClock();
+ const run=await f.service.owner.issueRun({laneId:'second',controllerSessionBase:'second'}),second=createDecisionBridge({grant:{...run,admission:await f.service.control(run.capability,'runStatus')},fetchImpl:f.fetchHTTP});
+ const c=new Comparison({clock,config:{gravity:true,left:'openai',right:'openai',pieceCap:1},providerFactory:(key,settings,{lane})=>lane?second:f.bridge});
+ try{const step=c.step();await gate;await clock.advance(800);assert(c.view.lanes.every(l=>l.observation.active.y===1));assert.equal(calls,1);release();await settle(()=>calls===2&&c.view.lanes.every(l=>l.status==='falling'));assert.equal(f.service.status().available,true);await clock.advance(16000);await step;
+  assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(c.view.state,'completed');assert.equal(calls,2);assert.equal(clock.size,0);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);assert.equal(f.store.snapshot().browserSession.ownerHold,false);
+ }finally{release?.();c.dispose();await second.close();}
+});
+
+test('lost gravity acknowledgement retains the real board and one request with a verifiable prefix',async t=>{
+ const f=await fixture(t,{httpServer:true}),clock=fakeClock();let acks=0,journal;
+ const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,o)=>{const body=JSON.parse(o.body),response=await f.fetchHTTP(route,o);if(body.action==='settleGravity'){acks++;throw new Error('dummy lost gravity acknowledgement');}return response;}});
+ const c=new GravityController({sessionId:'browser',provider:bridge,clock,onTransition:({input,view})=>journal.append(0,input,view)});journal=new DecisionJournal({mode:'solo'});journal.addLane(0,'computer',c.view,gravityPolicy(providerPolicy(bridge)));
+ const step=c.step();await settle(()=>c.view.status==='falling');await clock.advance(16000);await step;assert.equal(c.view.pieces,1);assert.equal(c.view.status,'error');assert.equal(c.view.recoveryRequired,true);assert.equal(acks,1);assert.equal(f.store.snapshot().used.attempts,1);assert.equal(f.store.snapshot().browserSession.ownerHold,true);assert.equal(clock.size,0);assert.equal(verifyDecisionUIRecord(journal.exportRun()).ok,true);await bridge.close();
 });

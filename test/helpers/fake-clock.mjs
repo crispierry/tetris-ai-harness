@@ -1,0 +1,2 @@
+const micro=async()=>{for(let n=0;n<20;n++)await Promise.resolve();};
+export function fakeClock(){let now=0,id=0;const jobs=new Map();return {now:()=>now,setTimeout:(fn,ms)=>{jobs.set(++id,{at:now+ms,fn});return id;},clearTimeout:id=>jobs.delete(id),get size(){return jobs.size;},async advance(ms){const target=now+ms;for(;;){const next=[...jobs].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>target)break;now=next[1].at;jobs.delete(next[0]);next[1].fn();await micro();}now=target;await micro();}};}

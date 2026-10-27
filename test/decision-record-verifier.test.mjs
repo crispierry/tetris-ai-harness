@@ -43,7 +43,7 @@ test('all three production exporters emit canonically verifiable successful HTTP
   for(let n=0;n<8;n++)await $('h-step').trigger('click');const json=mounted.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);assert.equal(JSON.parse(json).lanes[0].policy.transport,'http-fixture');assert(JSON.parse(json).events.some(e=>e.input.receipt?.version==='decision-receipt-2'));
   $('h-replay').trigger('click');await $('h-step').trigger('click');assert.equal(mounted.exportRun(),json);
  }finally{mounted.dispose();globalThis.fetch=oldFetch;}
- const f=bridgeFixture(),c=new Comparison({config:{right:'openai',pieceCap:3},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});
+ const f=bridgeFixture(),c=new Comparison({config:{gravity:false,right:'openai',pieceCap:3},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});
  try{for(let n=0;n<3;n++)await c.step();const json=c.exportRun(),v=verifyDecisionUIRecord(json);assert.deepEqual(v.outcomes,['capped','capped']);c.replay();c.pause();await c.step();assert.equal(c.exportRun(),json);}finally{c.dispose();await f.bridge.close();}
  const g=bridgeFixture(),v=new HumanVersus({pieceCap:3,providerFactory:()=>g.bridge});
  try{for(let n=0;n<3;n++)await v.stepAlgorithm();v.start();for(let n=0;n<3;n++){for(let t=0;t<10;t++)v.tick(16);v.input('drop');}assert.deepEqual(verifyDecisionUIRecord(v.exportRun()).outcomes,['capped','capped']);}finally{v.dispose();await g.bridge.close();}
@@ -101,7 +101,7 @@ test('Node CLI hashes exact saved bytes, preserves bad input and reports explici
 });
 
 test('comparison samples share one canonical event budget and preserve a verifiable censored prefix',async()=>{
- const f=bridgeFixture(),c=new Comparison({config:{left:'local',right:'openai',samples:2,pieceCap:1},providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
+ const f=bridgeFixture(),c=new Comparison({config:{gravity:false,left:'local',right:'openai',samples:2,pieceCap:1},providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
  try{
   for(let n=0;n<1997;n++)c.pause();await c.step();await c.step();
   const record=JSON.parse(c.exportRun());assert.equal(record.version,'decision-ui-comparison-series-1');
@@ -111,7 +111,7 @@ test('comparison samples share one canonical event budget and preserve a verifia
 });
 
 test('comparison series reject sessions reused on the opposite lane',async()=>{
- const f=bridgeFixture(),c=new Comparison({config:{left:'local',right:'openai',pieceCap:1},providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
+ const f=bridgeFixture(),c=new Comparison({config:{gravity:false,left:'local',right:'openai',pieceCap:1},providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
  try{
   await c.step();const first=JSON.parse(c.exportRun()),mirrored=clone(first);
   mirrored.lanes.reverse().forEach((l,i)=>l.id=i);mirrored.events.forEach(e=>e.lane=1-e.lane);mirrored.finals.reverse().forEach((f,i)=>f.lane=i);

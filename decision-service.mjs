@@ -3,23 +3,23 @@ import { qualifiedDecisions } from './decision-qualification.mjs';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { digest } from './decision-store.mjs';
 import { packetCheck, requestFor, parse } from './choice-protocol.mjs';
-import { createGame, cells } from './public/engine.mjs';
+import { createGame, cells, gravityInterval } from './public/engine.mjs';
 import { observe, enumerate, candidateEvidence, freeze } from './public/harness.mjs';
 import { instructionPacket } from './public/briefing.mjs';
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const same = (a,b) => digest(a) === digest(b);
 const config = Object.freeze({ model: 'gpt-6-luna', maxCandidates: 255, maxInputBytes: 1048576 });
-export function canonicalPacket(packet) {
+export function canonicalPacket(packet,{gravity=false}={}) {
   packetCheck(packet, config);
   const o = packet.observation, p = o.active;
-  if (!p || !['rotation','x','y'].every(k => Number.isInteger(p[k])) || p.rotation < 0 || p.rotation > 3 || Math.abs(p.x) > 20 || p.y < -4 || p.y > 20 || o.score > 10000000 || o.gravityElapsedMs !== 0 || o.revision < 1 || !/^[A-Za-z0-9_-]{1,80}$/.test(o.sessionId)) fail('input');
+  if (!p || !['rotation','x','y'].every(k => Number.isInteger(p[k])) || p.rotation < 0 || p.rotation > 3 || Math.abs(p.x) > 20 || p.y < -4 || p.y > 20 || o.score > 10000000 || (!gravity ? o.gravityElapsedMs !== 0 : !Number.isFinite(o.gravityElapsedMs)||o.gravityElapsedMs<0||o.gravityElapsedMs>=gravityInterval(o.level)) || o.revision < 1 || !/^[A-Za-z0-9_-]{1,80}$/.test(o.sessionId)) fail('input');
   const active = { type: p.type, rotation: p.rotation, x: p.x, y: p.y };
   if (!cells(active).every(({x,y}) => x >= 0 && x < 10 && y >= 0 && y < 20 && o.board[y][x] === null)) fail('input');
   // Refill is private synthetic machinery; candidateEvidence exposes only the real known prefix.
-  const state = { ...createGame(1), board: o.board, active, queue: [...o.next], nextType: o.next[0], status: 'playing', score: o.score, lines: o.lines, level: o.level, gravityElapsed: 0 };
+  const state = { ...createGame(1), board: o.board, active, queue: [...o.next], nextType: o.next[0], status: 'playing', score: o.score, lines: o.lines, level: o.level, gravityElapsed: o.gravityElapsedMs };
   const binding = { sessionId: o.sessionId, revision: o.revision };
   const candidates = enumerate(state, binding).map(c => candidateEvidence(state, c, binding));
-  const rebuilt = instructionPacket(observe(state, binding), candidates, { requestId: packet.requestId, deadlineMs: packet.deadlineMs });
+  const rebuilt = instructionPacket(observe(state, binding), candidates, { requestId: packet.requestId, deadlineMs: packet.deadlineMs,gravity });
   if (!same(packet, rebuilt)) fail('input'); return rebuilt;
 }
 function checkPolicy(p) {
