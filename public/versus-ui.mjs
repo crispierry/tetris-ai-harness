@@ -37,6 +37,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     $('v-stop').disabled = view.state === 'ready' || view.state === 'stopped' || finished;
     $('v-step').disabled = view.running || view.busy || view.playback || archiveBlocked || (!replay && !!view.lanes[1].outcome) || unavailable;
     text('v-step', replay ? 'Next saved frame' : 'Step');
+    $('v-step').setAttribute('aria-label',replay?'Next saved frame':'Step computer');
     $('v-replay').disabled = !view.frameCount; $('v-export').disabled = !view.frameCount;
     const algorithm=view.lanes[1],algorithmPresentation=algorithm.error||algorithm.recoveryRequired?null:algorithm.presentation,algorithmPieces=algorithmPresentation?.before.pieces??algorithm.pieces;
     const progress = replay ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new choices`

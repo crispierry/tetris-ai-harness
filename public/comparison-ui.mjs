@@ -38,6 +38,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     $('c-pause').disabled = !view.auto && !view.busy; $('c-stop').disabled = !view.locked;
     $('c-replay').disabled = !view.frameCount; $('c-export').disabled = !view.frameCount;
     text('c-start', view.mode === 'replay' ? 'Play saved frames' : view.locked ? 'Resume' : 'Start');
+    text('c-step',view.mode==='replay'?'Next frame':'Step');$('c-step').setAttribute('aria-label',view.mode==='replay'?'Next saved frame':'Step one piece in each eligible lane');
     const progress = view.mode === 'replay'
       ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new decisions or live metrics`
       : `${STATUS[view.state]} · Sample ${view.sample} of ${view.config.samples} · ${view.summary.observedPairs} completed pairs`;

@@ -36,10 +36,13 @@ test('solo saved replay steps and plays immutable frames with zero provider deci
  const $=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};let exported;
  const doc={getElementById:$,createElement:()=>new Element(),addEventListener:(k,fn)=>listeners[k]=fn,hidden:false};
  const mounted=mountHarness(doc,{window:{addEventListener(){}},onExport:json=>exported=json});
+ assert.equal($('h-replay').disabled,true);assert.equal($('h-export').disabled,true);
  await $('h-step').trigger('click');await $('h-step').trigger('click');assert.equal($('h-pieces').textContent,'2');assert.equal($('h-provider').disabled,true);
+ assert.equal($('h-replay').disabled,false);assert.equal($('h-export').disabled,false);
  const original=mounted.exportRun(),serial=mounted.controller.view.lastDecision.requestId;
  $('h-replay').trigger('click');assert.equal($('h-status').textContent,'Saved visual replay');assert.equal($('h-pieces').textContent,'1');
+ assert.equal($('h-step').attributes['aria-label'],'Next saved frame');
  await $('h-step').trigger('click');assert.equal($('h-pieces').textContent,'2');assert.equal(mounted.controller.view.lastDecision.requestId,serial);
  $('h-export').trigger('click');assert.equal(exported,original);assert.equal(JSON.parse(exported).version,'decision-ui-record-2');assert.equal(verifyDecisionUIRecord(exported).ok,true);
- $('h-reset').trigger('click');assert.equal($('h-pieces').textContent,'0');assert.equal($('h-provider').disabled,false);mounted.dispose();
+ $('h-reset').trigger('click');assert.equal($('h-pieces').textContent,'0');assert.equal($('h-provider').disabled,false);assert.equal($('h-replay').disabled,true);assert.equal($('h-export').disabled,true);assert.equal($('h-step').attributes['aria-label'],'Step one piece');mounted.dispose();
 });
