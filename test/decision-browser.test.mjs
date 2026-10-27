@@ -1,4 +1,5 @@
 import {instructionPacket} from '../public/briefing.mjs';
+import {FACT_CHOICE_VERSION,placementFacts} from '../decision-facts.mjs';
 import {singlePlacementPacket} from './helpers/single-placement.mjs';
 import {createGravityTurn,stateFromObservation,gravityObservation} from '../public/ai-gravity.mjs';
 import {recordedObservation} from '../public/decision-record.mjs';
@@ -45,6 +46,13 @@ function extendedConfig(){
  const c=config();c.qualification.projectEvidence.thresholdAmountCents=500;
  Object.assign(c.policy,{kind:'risk-accepted-project-browser-policy-2',maxAttempts:2000,timeoutMs:10000,qualificationDigest:digest(c.qualification)});return c;
 }
+test('factual history comes only from confirmed engine consequences and resets with the game epoch',async t=>{
+ const inputs=[],f=await fixture(t,{configuration:extendedConfig(),httpServer:true,fetchImpl:upstream({inspect:(_url,o)=>inputs.push(JSON.parse(JSON.parse(o.body).input))})}),c=new GravityController({sessionId:'browser',provider:f.bridge});
+ const initial=c.view.observation;await c.step();const first=c.view.observation;await c.step();
+ assert.equal(inputs[0].format,FACT_CHOICE_VERSION);assert.deepEqual(inputs[0].recentPlacements,[]);assert.deepEqual(inputs[1].recentPlacements,[placementFacts(initial,first)]);assert.equal(inputs[1].recentPlacements[0].occupiedCellsAfter,4);
+ assert(Object.values(f.store.snapshot().requests).every(e=>e.selectionFormat===FACT_CHOICE_VERSION));
+ c.reset();await c.step();assert.deepEqual(inputs[2].recentPlacements,[]);assert.equal((await f.bridge.status()).attempts,3);
+});
 test('a slow OpenAI response survives the old deadline in both controllers and replays with versioned limits',async t=>{
  for(const gravity of [false,true]){
   const configuration=extendedConfig();assert(qualifiedDecisionBrowser(configuration.qualification,configuration.policy));

@@ -1,3 +1,4 @@
+import {FACT_CHOICE_VERSION,placementFacts} from './decision-facts.mjs';
 import {decisionFailure} from './decision-failure.mjs';
 import {GRAVITY_TIMING,LEGACY_GRAVITY_TIMING,gravityProofVersion,replayGravityProof,stateFromObservation} from './public/ai-gravity.mjs';
 import {recordedObservation} from './public/decision-record.mjs';
@@ -13,8 +14,8 @@ import {qualifiedDecisionBrowser,BROWSER_MODE,BROWSER_LIMITS,BROWSER_LIMITS_V2,B
 import {freeze} from './public/harness.mjs';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const same=(a,b)=>digest(a)===digest(b);
-export async function createDecisionBrowserService({store,policy,qualification,credential,fetchImpl=globalThis.fetch,selectionFormat=HOLE_CHOICE_VERSION,reverseChoices=false}={}){
- if(![COMPACT_CHOICE_VERSION,HOLE_CHOICE_VERSION,LEGACY_CHOICE_VERSION].includes(selectionFormat)||typeof reverseChoices!=='boolean')fail('browser_configuration');
+export async function createDecisionBrowserService({store,policy,qualification,credential,fetchImpl=globalThis.fetch,selectionFormat=FACT_CHOICE_VERSION,reverseChoices=false}={}){
+ if(![COMPACT_CHOICE_VERSION,HOLE_CHOICE_VERSION,LEGACY_CHOICE_VERSION,FACT_CHOICE_VERSION].includes(selectionFormat)||typeof reverseChoices!=='boolean')fail('browser_configuration');
  const extended=policy?.kind==='risk-accepted-project-browser-policy-2',limits=extended?BROWSER_LIMITS_V2:BROWSER_LIMITS;
  const choiceOptions=Object.freeze({format:selectionFormat,reverseChoices});
  policy=freeze(structuredClone(policy));qualification=freeze(structuredClone(qualification));
@@ -45,13 +46,13 @@ export async function createDecisionBrowserService({store,policy,qualification,c
     if(!entry?.gravity||entry.status!=='completed'||!entry.deliveryPending||next.browserSession.ownerHold||expired())fail('reconciliation_required');
     try{if(proof?.version!==gravityProofVersion(entry.gravity.timing??LEGACY_GRAVITY_TIMING))fail('input');const initial=stateFromObservation(entry.gravity.observation,observation?.next?.[4]),binding={sessionId:entry.gravity.observation.sessionId,revision:entry.gravity.observation.revision};
      const turn=replayGravityProof(initial,binding,proof,{selectedCandidateId:entry.gravity.selectedCandidateId}),actual=recordedObservation(observe(turn.state,{sessionId:binding.sessionId,revision:binding.revision+1}));
-     if(!same(actual,observation)||turn.proof.placementLimit>1000-run.placements)fail('input');run.gravityExpected=actual;run.expected=null;run.placements+=turn.locks;run.terminal=['over','won'].includes(actual.status);entry.deliveryPending=false;entry.gravitySettled={locked:turn.locked,missed:turn.missed};
+     if(!same(actual,observation)||turn.proof.placementLimit>1000-run.placements)fail('input');run.gravityExpected=actual;run.expected=null;run.placements+=turn.locks;run.terminal=['over','won'].includes(actual.status);entry.deliveryPending=false;entry.gravitySettled={locked:turn.locked,missed:turn.missed};run.factualHistory=[...(run.factualHistory??[]),placementFacts(entry.gravity.observation,actual,turn.locks)].slice(-5);
     }catch{fail('input');}
    });return {accepted:true};
   }
   if(action==='acceptDecision'){
    if(epoch!==undefined||typeof requestId!=='string'||requestId.length>200)fail('input');
-   await store.transact(next=>{const run=auth(capability,next,{read:true}),entry=Object.values(next.requests).find(x=>x.runId===run.id&&x.requestId===requestId);if(!entry||entry.gravity||entry.status!=='completed'||!entry.deliveryPending||next.browserSession.ownerHold||expired())fail('reconciliation_required');entry.deliveryPending=false;});return {accepted:true};
+   await store.transact(next=>{const run=auth(capability,next,{read:true}),entry=Object.values(next.requests).find(x=>x.runId===run.id&&x.requestId===requestId);if(!entry||entry.gravity||entry.status!=='completed'||!entry.deliveryPending||next.browserSession.ownerHold||expired())fail('reconciliation_required');if(entry.placementFacts)run.factualHistory=[...(run.factualHistory??[]),entry.placementFacts].slice(-5);entry.deliveryPending=false;});return {accepted:true};
   }
   if(action==='interrupt'){
    slot?.runId===r.id&&slot.abort.abort();
@@ -62,7 +63,7 @@ export async function createDecisionBrowserService({store,policy,qualification,c
   if(action==='close'){if(epoch!==undefined)fail('input');if(slot?.runId===r.id)slot.abort.abort();if(Object.values(s.requests).some(x=>x.runId===r.id&&x.deliveryPending))await hold('completion_unacknowledged');await store.transact(next=>{next.runs[r.id].closed=true;});return {closed:true,epoch:r.epoch};}
   if(action!=='advanceEpoch'||!Number.isInteger(epoch)||epoch!==r.epoch+1||epoch>=100)fail('epoch');
   if(slot?.runId===r.id||s.browserSession.ownerHold||Object.values(s.requests).some(x=>x.runId===r.id&&x.deliveryPending)||expired())fail('reconciliation_required');
-  await store.transact(next=>{const run=auth(capability,next,{read:true});if(next.browserSession.ownerHold||run.closed||epoch!==run.epoch+1)fail('reconciliation_required');run.epoch=epoch;run.expected=null;delete run.gravityExpected;delete run.gravityMode;run.placements=0;run.terminal=false;run.interrupted=false;run.reason=null;});return {epoch,closed:false};
+  await store.transact(next=>{const run=auth(capability,next,{read:true});if(next.browserSession.ownerHold||run.closed||epoch!==run.epoch+1)fail('reconciliation_required');run.epoch=epoch;run.expected=null;delete run.factualHistory;delete run.gravityExpected;delete run.gravityMode;run.placements=0;run.terminal=false;run.interrupted=false;run.reason=null;});return {epoch,closed:false};
  }
  async function decide(capability,packet,{signal,gravity=false}={}){
   const run=auth(capability,store.snapshot(),{read:true});
@@ -75,7 +76,7 @@ export async function createDecisionBrowserService({store,policy,qualification,c
    if(signal?.aborted)fail('cancelled');listener=()=>job.abort.abort();signal?.addEventListener('abort',listener,{once:true});
    const remaining=Math.min(policy.timeoutMs,policy.expiresAt-Date.now(),packet?.deadlineMs??policy.timeoutMs),deadline=Date.now()+remaining;if(remaining<=0)fail('session_expired');timer=setTimeout(()=>job.abort.abort(expired()?'session_expired':'decision_timeout'),remaining);
    const current=()=>{const s=store.snapshot(),r=s.runs[run.id];if(expired()||job.abort.signal.reason==='session_expired')fail('session_expired');if(job.abort.signal.reason==='decision_timeout'||Date.now()>=deadline)fail('decision_timeout');if(job.abort.signal.aborted||Date.now()>=deadline||expired()||closing||broken||s.browserSession.ownerHold||r.closed||r.epoch!==job.epoch||(!completed&&r.interrupted))fail('cancelled');};
-   const p=canonicalPacket(packet,{gravity});if(p.observation.sessionId!==`${run.controllerSessionBase}-${run.epoch}`)fail('epoch');const forced=p.candidates.length===1,request=forced?null:requestFor('decisions',p,{model:'gpt-6-luna'},choiceOptions);if(request&&Buffer.byteLength(JSON.stringify(request.body))>1048576)fail('input');key=`${run.id}:${run.epoch}:${p.requestId}`;
+   const p=canonicalPacket(packet,{gravity});if(p.observation.sessionId!==`${run.controllerSessionBase}-${run.epoch}`)fail('epoch');const forced=p.candidates.length===1,request=forced?null:requestFor('decisions',p,{model:'gpt-6-luna'},{...choiceOptions,history:store.snapshot().runs[run.id].factualHistory??[]});if(request&&Buffer.byteLength(JSON.stringify(request.body))>1048576)fail('input');key=`${run.id}:${run.epoch}:${p.requestId}`;
    await store.transact(s=>{current();const r=auth(capability,s);if(s.browserSession.ownerHold||s.used.attempts>=policy.maxAttempts)fail('session_request_limit');if(s.requests[key])fail('duplicate');if(r.placements>=1000)fail('limit');if(r.gravityMode!==undefined&&r.gravityMode!==gravity)fail('continuity');if(Object.values(s.requests).some(x=>x.runId===r.id&&x.deliveryPending))fail('reconciliation_required');if(gravity&&r.gravityExpected){if(!same(recordedObservation(p.observation),r.gravityExpected))fail('continuity');}else if(!r.expected){if(p.stateRevision!==1)fail('revision');}else{const e=r.expected,o=p.observation;if(p.stateRevision!==e.revision||!same(o.board,e.board)||!same(o.active,e.active)||o.score!==e.score||o.lines!==e.lines||o.level!==e.level||!same(o.next.slice(0,4),e.next))fail('continuity');}r.gravityMode=gravity;
     if(forced&&Object.values(s.requests).filter(x=>x.upstream===false).length>=1000)fail('limit');if(!forced)s.used.attempts++;s.requests[key]={selectionFormat:forced?'forced-local-1':selectionFormat,reverseChoices,digest:digest(p),status:'reserved',upstream:!forced,deadline,runId:run.id,epoch:run.epoch,requestId:p.requestId,deliveryPending:false};});current();
    if(!forced){await store.transact(s=>{current();s.requests[key].status='dispatch-intent';});current();sent=true;}
@@ -90,7 +91,7 @@ export async function createDecisionBrowserService({store,policy,qualification,c
    if(result?.status===429){const code=result.body?.error?.code;fail(code==='project_spend_limit_exceeded'?'project_budget_limit':'quota_unknown');}
    if(result?.status>=500)fail('provider_error');
    phase='decode';const decoded=forced?{choice:{requestId:p.requestId,stateRevision:p.stateRevision,selectedCandidateId:p.candidates[0].id}}:parse('decisions',result,p,choiceOptions),usage=forced?null:pilotUsage(result.body?.usage),observedModel=forced?null:result.body.model,selected=p.candidates.find(c=>c.id===decoded.choice.selectedCandidateId);phase='commit';
-   await store.transact(s=>{current();const r=s.runs[run.id];const entry=s.requests[key];if(gravity){entry.gravity={timing:GRAVITY_TIMING,observation:p.observation,selectedCandidateId:decoded.choice.selectedCandidateId};}else{r.expected=selected.afterstate;r.placements++;r.terminal=selected.afterstate.status!=='playing';}entry.status='completed';entry.observedModel=observedModel;entry.usage=usage;entry.deliveryPending=true;});completed=true;current();
+   await store.transact(s=>{current();const r=s.runs[run.id];const entry=s.requests[key];if(gravity){entry.gravity={timing:GRAVITY_TIMING,observation:p.observation,selectedCandidateId:decoded.choice.selectedCandidateId};}else{entry.placementFacts=placementFacts(p.observation,selected.afterstate);r.expected=selected.afterstate;r.placements++;r.terminal=selected.afterstate.status!=='playing';}entry.status='completed';entry.observedModel=observedModel;entry.usage=usage;entry.deliveryPending=true;});completed=true;current();
    return freeze({choice:decoded.choice,receipt:{version:`decision-browser-${forced?'forced-':gravity?'gravity-':''}receipt-${extended?2:1}`,provider:'OpenAI',requestedModel:'gpt-6-luna',observedModel,requestLatencyMs:performance.now()-started,completions:forced?0:1,placements:gravity?0:1,actualExternalCalls:forced?0:null,remainingAllowance:{attempts:Math.max(0,policy.maxAttempts-store.snapshot().used.attempts)},completedResponses:forced?0:1,mode:BROWSER_MODE,runId:run.id,laneId:run.laneId,epoch:run.epoch,lineage:store.snapshot().lineage,policyDigest:store.snapshot().policyDigest,usage,estimatedReservationMicros:null,reservedInputTokens:null,requestId:p.requestId,stateRevision:p.stateRevision,selectedCandidateId:decoded.choice.selectedCandidateId,attempts:forced?0:1,actualCostUSD:forced?0:null,usageProvenance:forced?'Only legal placement; resolved locally without a provider request':'Provider-reported usage; actual billing unknown; project-limit enforcement delay risk accepted',accountingMode:'project-hard-limit-delay-risk',qualificationKind:BROWSER_QUALIFICATION_KIND}});
   }catch(error){
    const abortCode=['decision_timeout','session_expired'].includes(job.abort.signal.reason)?job.abort.signal.reason:null;
