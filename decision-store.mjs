@@ -3,12 +3,14 @@ import { open, lstat, mkdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
+import { validOwnerAbandonment,validPredecessor } from './decision-recovery-contract.mjs';
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])])) : value;
 export const digest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const bad = code => { throw Object.assign(new Error(code), { code }); };
-export async function openDecisionStore({ directory, lineage, policy, enroll = false, faultInjection } = {}) {
+export async function openDecisionStore({ directory, lineage, policy, enroll = false, faultInjection, ownerRecovery } = {}) {
   if (faultInjection !== undefined && (typeof faultInjection !== 'function' || faultInjection.mode !== 'fixture')) bad('configuration');
   policy = structuredClone(policy);
+  if(ownerRecovery!==undefined&&(!ownerRecovery||Object.keys(ownerRecovery).join(',')!=='expectedLedgerSHA256'||!/^[a-f0-9]{64}$/.test(ownerRecovery.expectedLedgerSHA256??'')||enroll||policy?.kind!=='risk-accepted-project-browser-policy-1'))bad('configuration');
   if (!path.isAbsolute(directory ?? '') || !/^[A-Za-z0-9_-]{1,80}$/.test(lineage ?? '')) bad('configuration');
   const sourceRoot = fileURLToPath(new URL('./', import.meta.url));
   if (directory === sourceRoot.slice(0,-1) || directory.startsWith(sourceRoot)) bad('unsafe_store');
@@ -37,7 +39,7 @@ export async function openDecisionStore({ directory, lineage, policy, enroll = f
   try {
     try {
       const stat = await lstat(file); if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o077) || stat.size > 16000000) bad('unsafe_store');
-      const h = await open(file, 'r'); try { state = JSON.parse(await h.readFile('utf8')); } finally { await h.close(); }
+      const h = await open(file, 'r'); try { const bytes=await h.readFile();if(ownerRecovery&&createHash('sha256').update(bytes).digest('hex')!==ownerRecovery.expectedLedgerSHA256)bad('recovery_conflict');state = JSON.parse(bytes.toString('utf8')); } finally { await h.close(); }
     } catch (e) {
       if (e.code !== 'ENOENT' || !enroll) throw e;
       // Enrollment marker survives ledger removal: even explicit enrollment cannot refill a lost lineage.
@@ -45,15 +47,17 @@ export async function openDecisionStore({ directory, lineage, policy, enroll = f
       try { await marker.writeFile(JSON.stringify({lineage, policyDigest:digest(policy)})); await marker.sync(); } finally { await marker.close(); }
       state = { version: 1, lineage, policy, policyDigest: digest(policy), used: { attempts: 0, inputTokens: 0, estimatedMicros: 0 }, runs: {}, requests: {} }; await persist(state);
     }
-    if (state.version !== 1 || state.lineage !== lineage || state.policyDigest !== digest(policy) || digest(state.policy) !== digest(policy) || !state.used || !state.runs || !state.requests || Object.values(state.requests).some(r => ['reserved','dispatch-intent','uncertain'].includes(r.status)||r.deliveryPending===true)) bad('reconciliation_required');
+    if (state.version !== 1 || state.lineage !== lineage || state.policyDigest !== digest(policy) || digest(state.policy) !== digest(policy) || !state.used || !state.runs || !state.requests || Object.values(state.requests).some(r => ['reserved','dispatch-intent'].includes(r.status)||(!ownerRecovery&&r.status==='uncertain')||r.deliveryPending===true)) bad('reconciliation_required');
     if (Object.keys(state.runs).length > policy.maxRuns || Object.keys(state.requests).length > Math.min(10000, policy.maxRuns * policy.maxEpochs * policy.maxPlacements)) bad('damaged_store');
     for (const [id,r] of Object.entries(state.runs)) if (r.id !== id || !/^[a-f0-9]{64}$/.test(r.capabilityDigest ?? '') || !Number.isInteger(r.epoch) || r.epoch < 0 || r.epoch >= policy.maxEpochs || !Number.isInteger(r.placements) || r.placements < 0 || r.placements > policy.maxPlacements || typeof r.closed !== 'boolean' || typeof r.terminal !== 'boolean' || typeof r.interrupted !== 'boolean' || r.expiresAt !== policy.expiresAt) bad('damaged_store');
-    for (const r of Object.values(state.requests)) if (!['completed','rejected'].includes(r.status) || !/^[a-f0-9]{64}$/.test(r.digest ?? '') || !state.runs[r.runId]) bad('damaged_store');
+    for (const [key,r] of Object.entries(state.requests)) if ((!['completed','rejected',...(ownerRecovery?['uncertain']:[])].includes(r.status)&&!validOwnerAbandonment(state,key,r,digest)) || !/^[a-f0-9]{64}$/.test(r.digest ?? '') || !state.runs[r.runId]) bad('damaged_store');
     for (const key of ['attempts','inputTokens','estimatedMicros']) if (!Number.isSafeInteger(state.used[key]) || state.used[key] < 0) bad('damaged_store');
+    if(state.predecessor&&!validPredecessor(state))bad('damaged_store');
   } catch (e) { await lock.close(); await unlink(lockPath); throw e; }
   return Object.freeze({
     get sound() { return !broken && !closed; },
     fixtureOnly: faultInjection !== undefined,
+    recoveryOnly: ownerRecovery !== undefined,
     snapshot: () => structuredClone(state),
     async inspect() { await tail; if (closed || broken) bad('store_unavailable'); return structuredClone(state); },
     transact(change) {

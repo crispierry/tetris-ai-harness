@@ -36,7 +36,7 @@ export function createDecisionService({ enabled = false, store, policy, qualific
     // A fixture never attests live qualification. Live must be explicitly qualified by the owner.
     qualification = qualification ? freeze(structuredClone(qualification)) : qualification;
     const qualified = qualifiedDecisions(qualification, policy);
-    if (!hosted && store && (fixture || (!store.fixtureOnly && !transport && qualified && typeof credential === 'string' && credential.length > 0))) { available = true; reason = fixture ? 'fixture-only' : 'owner-qualified-live'; }
+    if (!hosted && store && !store.recoveryOnly && (fixture || (!store.fixtureOnly && !transport && qualified && typeof credential === 'string' && credential.length > 0))) { available = true; reason = fixture ? 'fixture-only' : 'owner-qualified-live'; }
     else reason = hosted ? 'host_unqualified' : 'qualification_required';
   }
   const mode = reason === 'fixture-only' ? 'http-fixture' : 'live';
@@ -171,7 +171,7 @@ export function createDecisionService({ enabled = false, store, policy, qualific
 // Count-only admission is intentionally separate from the strict reservation path.
 export function createDecisionPilotService({store,policy,qualification,credential,fetchImpl=globalThis.fetch}={}){
  policy=freeze(structuredClone(policy));qualification=freeze(structuredClone(qualification));
- if(!store||store.fixtureOnly||!qualifiedDecisionPilot(qualification,policy)||typeof credential!=='string'||createHash('sha256').update(credential,'utf8').digest('hex')!==qualification.projectEvidence.keyFingerprint||typeof fetchImpl!=='function'||store.snapshot().policyDigest!==digest(policy))fail('pilot_configuration');
+ if(!store||store.fixtureOnly||store.recoveryOnly||!qualifiedDecisionPilot(qualification,policy)||typeof credential!=='string'||createHash('sha256').update(credential,'utf8').digest('hex')!==qualification.projectEvidence.keyFingerprint||typeof fetchImpl!=='function'||store.snapshot().policyDigest!==digest(policy))fail('pilot_configuration');
  let closing=false,slot=null;const operations=new Set(),upstreams=new Set();
  const status=()=>freeze({available:!closing&&store.sound&&qualifiedDecisionPilot(qualification,policy)&&!Object.values(store.snapshot().runs).some(r=>r.interrupted),reason:closing?'shutdown':!store.sound?'store_unavailable':!qualifiedDecisionPilot(qualification,policy)?'pilot_expired':Object.values(store.snapshot().runs).some(r=>r.interrupted)?'pilot_stopped':'owner-risk-accepted-pilot'});
  const authenticate=(capability,s,{read=false}={})=>{if(!read&&!status().available)fail('unavailable');if(typeof capability!=='string'||!/^[a-f0-9]{64}$/.test(capability))fail('unauthorized');const run=Object.values(s.runs).find(r=>r.capabilityDigest===digest(capability));if(!run||(!read&&(run.closed||run.terminal||run.interrupted||Date.now()>=run.expiresAt)))fail('unauthorized');return run;};

@@ -10,7 +10,7 @@ const fail=code=>{throw Object.assign(new Error(code),{code});};
 const same=(a,b)=>digest(a)===digest(b);
 export async function createDecisionBrowserService({store,policy,qualification,credential,fetchImpl=globalThis.fetch}={}){
  policy=freeze(structuredClone(policy));qualification=freeze(structuredClone(qualification));
- if(!store||store.fixtureOnly||!qualifiedDecisionBrowser(qualification,policy)||typeof credential!=='string'||createHash('sha256').update(credential,'utf8').digest('hex')!==qualification.projectEvidence.keyFingerprint||typeof fetchImpl!=='function'||store.snapshot().policyDigest!==digest(policy))fail('browser_configuration');
+ if(!store||store.fixtureOnly||store.recoveryOnly||!qualifiedDecisionBrowser(qualification,policy)||typeof credential!=='string'||createHash('sha256').update(credential,'utf8').digest('hex')!==qualification.projectEvidence.keyFingerprint||typeof fetchImpl!=='function'||store.snapshot().policyDigest!==digest(policy))fail('browser_configuration');
  if(!store.snapshot().browserSession){await store.transact(s=>{if(Object.keys(s.runs).length||s.used.attempts)fail('reconciliation_required');s.browserSession={version:1,ownerHold:false,reconciliationRequired:false,reason:null};});}
  const initial=store.snapshot().browserSession;
  if(initial.version!==1||typeof initial.ownerHold!=='boolean'||typeof initial.reconciliationRequired!=='boolean'||(initial.reason!==null&&typeof initial.reason!=='string'))fail('reconciliation_required');
