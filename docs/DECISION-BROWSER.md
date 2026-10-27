@@ -32,6 +32,8 @@ The existing pairing panel permanently displays this line for browser risk mode,
 
 The panel shows authenticated aggregate remaining session attempts and immutable local expiry with time zone. Details separate session attempts from this run's attempted/completed/placement/uncertain counts. They identify provider-reported usage separately from billing, disclose shared earlier project usage, and report billing and token bounds as Unknown/Unverified. Strict and fixture modes retain their own provenance and reservation semantics. Stale counts are explicitly unavailable and cannot authorize another paid request; authenticated reconciliation refreshes the controls. Replay remains stored visual frames, with zero choices, and Reset never refills session allowance.
 
+Back/Forward cache departure pauses play and retains the page's existing in-memory grant and recording. Restoration authenticates fresh accounting before enabling OpenAI controls, without pairing again, refilling allowance or resuming automatically. An interruption hold or expiry remains blocking. Final page departure and explicit disposal close the grant and stop local timers/animation workers. A departure during an uncommitted paid request still follows the cancellation/hold rules below.
+
 ## Durable holds and recovery
 
 Every upstream attempt is counted durably before dispatch, with no refunds. Another grant's overlap request is rejected without cancelling the actual in-flight fetch. The global slot and ledger lock remain until the actual fetch/response stream settles, even after abort. Reads and close remain authenticated and available during holds.

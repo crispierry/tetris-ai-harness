@@ -13,6 +13,7 @@ export async function openDecisionStore({ directory, lineage, policy, enroll = f
   if(ownerRecovery!==undefined&&(!ownerRecovery||Object.keys(ownerRecovery).join(',')!=='expectedLedgerSHA256'||!/^[a-f0-9]{64}$/.test(ownerRecovery.expectedLedgerSHA256??'')||enroll||policy?.kind!=='risk-accepted-project-browser-policy-1'))bad('configuration');
   if(successorSeed!==undefined&&(!enroll||ownerRecovery||!successorSeed||Object.keys(successorSeed).sort().join(',')!=='predecessor,used'||!validPredecessor({policy,lineage,...successorSeed})||Object.keys(successorSeed.used).sort().join(',')!=='attempts,estimatedMicros,inputTokens'||Object.values(successorSeed.used).some(n=>!Number.isSafeInteger(n)||n<0)))bad('configuration');
   if (!path.isAbsolute(directory ?? '') || !/^[A-Za-z0-9_-]{1,80}$/.test(lineage ?? '')) bad('configuration');
+  directory = path.resolve(directory);
   const sourceRoot = fileURLToPath(new URL('./', import.meta.url));
   if (directory === sourceRoot.slice(0,-1) || directory.startsWith(sourceRoot)) bad('unsafe_store');
   // Every existing ancestor must be a real directory; private leaf must belong to this owner.

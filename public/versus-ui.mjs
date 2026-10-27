@@ -23,6 +23,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   let visual=null;const presenter=createPlacementPresenter({window:win,onFrame:observation=>{visual=observation;render(runner.view);},onSettled:()=>{visual=null;}});
   let previousAnnouncement = '', previousLaneStates = [], lastFrame = null, frameHandle = null, disposed = false;
   function render(view) {
+    if(disposed)return;
     const costLane=view.lanes[1];if(costLane)updateCost({gameId:costLane.observation.sessionId,receipt:costLane.lastDecision?.receipt,error:!!costLane.error,busy:costLane.status==='choosing',replay:view.mode==='replay',openAI:$('v-provider')?.value==='openai',tracked:view.policies?.[1]?.kind==='externalDecisions'});
     $('v-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     if($('v-provider'))$('v-provider').disabled=view.frameCount>0;
@@ -83,7 +84,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const runner = runnerFactory({ onChange: render,onPlacement:event=>presenter.play(event) });
   const select=$('v-provider');let pairing;
   const configure=()=>{if(select.value==='openai'&&pairing?.session.state.state!=='connected'){render(runner.view);return;}runner.configure(()=>select.value==='openai'?pairing.session.provider:providerFor(select.value,{nodeCap:4000,timeMs:500}));$('v-message').hidden=true;text('v-message','');};
-  pairing=mountDecisionPairing(doc,{mode:'versus',lane:'algorithm',onAvailabilityChange:()=>render(runner.view),beforeConnect:()=>{if(select.value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if(select?.value==='openai'){try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}}}});
+  pairing=mountDecisionPairing(doc,{mode:'versus',lane:'algorithm',window:win,onAvailabilityChange:()=>render(runner.view),beforeConnect:()=>{if(select.value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if(select?.value==='openai'){try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}}}});
   select?.addEventListener('change',()=>{pairing?.setEnabled(select.value==='openai');try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}});
   pairing?.setEnabled(false);
   const act = fn => async () => { try { $('v-message').hidden = true; text('v-message', ''); await fn();await pairing?.refresh(); } catch (error) { $('v-message').hidden = false; text('v-message', error.message); } };
@@ -111,8 +112,10 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     } else lastFrame = null;
     frameHandle = win.requestAnimationFrame(frame);
   }
-  const dispose = () => { disposed = true; win.cancelAnimationFrame(frameHandle);presenter.dispose(); runner.dispose(); };
-  win.addEventListener('pagehide', dispose); render(runner.view); frameHandle = win.requestAnimationFrame(frame);
+  const dispose = () => { if(disposed)return;disposed = true; win.cancelAnimationFrame(frameHandle);presenter.dispose(); runner.dispose();void pairing?.session.close().catch(()=>{}); };
+  win.addEventListener('pagehide',event=>{if(event?.persisted){pause();presenter.cancel();win.cancelAnimationFrame(frameHandle);frameHandle=null;}else dispose();});
+  win.addEventListener('pageshow',event=>{if(event.persisted&&!disposed&&frameHandle===null){lastFrame=null;frameHandle=win.requestAnimationFrame(frame);}});
+  render(runner.view); frameHandle = win.requestAnimationFrame(frame);
   return { runner, dispose };
 }
 if (typeof document !== 'undefined' && typeof window !== 'undefined') mountVersus(document, { window });

@@ -55,7 +55,7 @@ export function createDecisionSession({mode,lane,fetchImpl=globalThis.fetch,cryp
  });
 }
 
-export function mountDecisionPairing(doc,{mode,lane,onConnected=()=>{},beforeConnect=()=>{},onAvailabilityChange=()=>{}}) {
+export function mountDecisionPairing(doc,{mode,lane,window:win=globalThis,onConnected=()=>{},beforeConnect=()=>{},onAvailabilityChange=()=>{}}) {
  const root=doc.getElementById('decision-pairing');if(!root)return null;
  root.className='decision-pairing';
  const heading=doc.createElement('h3');heading.textContent='OpenAI Decisions';
@@ -75,6 +75,9 @@ export function mountDecisionPairing(doc,{mode,lane,onConnected=()=>{},beforeCon
  }});
  connect.addEventListener('click',async()=>{try{beforeConnect();await session.connect();}catch(error){status.textContent=error.message==='reconciliation_required'?'Owner reconciliation required before another Connect.':error.message;}});
  copy.addEventListener('click',()=>globalThis.navigator?.clipboard?.writeText(fullFingerprint));
- globalThis.addEventListener?.('pagehide',()=>session.close().catch(()=>{}));
+ // A cached page retains its in-memory grant and recording. Restoring it must
+ // authenticate fresh accounting before any further play; it never re-pairs.
+ win.addEventListener?.('pagehide',event=>{if(!event?.persisted)void session.close().catch(()=>{});});
+ win.addEventListener?.('pageshow',event=>{if(event.persisted&&session.state.state==='connected'){session.provider.invalidateAccounting();void session.status().catch(()=>{});}});
  return Object.freeze({session,get blocked(){return session.blocked;},get resetBlocked(){const a=session.accounting;return session.state.admission?.mode==='project-limit-browser'&&(a.freshness!=='current'||a.resetDisposition!=='settled-safe');},async refresh(){try{const a=await session.status();if(a)facts.textContent=session.accounting.freshness==='current'?describe(session.accounting):stale();}catch{facts.textContent=session.accounting.freshness==='current'?describe(session.accounting):stale();}},observe(receipt){if(receipt?.requestId && receipt.requestId!==lastObservedRequest){lastObservedRequest=receipt.requestId;this.refresh();}},setEnabled(value){enabled=value;root.hidden=!enabled;budget.hidden=!enabled||(session.state.mode!=='project-limit-browser'&&session.state.admission?.mode!=='project-limit-browser');if(enabled)session.availability();}});
 }

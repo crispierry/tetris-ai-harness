@@ -25,8 +25,9 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     $(`c-${index}-board`).append(tile); return tile;
   }));
   const visual=new Map(),presenters=[0,1].map(lane=>createPlacementPresenter({window:win,onFrame:observation=>{visual.set(lane,observation);render(comparison.view);},onSettled:()=>{visual.delete(lane);}}));
-  let previousAnnouncement = '', previousLaneStates = [];
+  let previousAnnouncement = '', previousLaneStates = [], disposed=false;
   function render(view) {
+    if(disposed)return;
     const costLane=view.lanes[1];if(costLane)updateCost({gameId:costLane.observation.sessionId,receipt:costLane.lastDecision?.receipt,error:!!costLane.error,busy:costLane.status==='choosing',replay:view.mode==='replay',openAI:$('c-right').value==='openai',tracked:costLane.policy?.kind==='externalDecisions'});
     SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (view.config.right==='openai' && ['nodeCap','timeMs'].includes(key)); });
     $('c-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
@@ -86,7 +87,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   }
   let pairing;
   const comparison = comparisonFactory({ onChange: render,onPlacement:event=>presenters[event.lane].play(event),providerFactory:(key,config)=>key==='openai'?pairing.session.provider:providerFor(key,config) });
-  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
+  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',window:win,onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
   const settings = () => Object.fromEntries(SETTINGS.map(key => [key, ['left', 'right'].includes(key) ? $('c-' + key).value : Number($('c-' + key).value)]));
   const act = fn => async () => {
     try { $('c-error').hidden = true; text('c-error', ''); await fn(); }
@@ -94,12 +95,15 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   };
   SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => {pairing?.setEnabled(settings().right==='openai');for(const field of ['nodeCap','timeMs'])$('c-'+field).disabled=settings().right==='openai';if(settings().right==='openai'&&pairing?.session.state.state!=='connected'){render(comparison.view);return;}comparison.configure(settings());})));
   pairing?.setEnabled(false);
+  const disposeComparison=comparison.dispose.bind(comparison);
+  comparison.dispose=()=>{if(disposed)return;disposed=true;presenters.forEach(p=>p.dispose());disposeComparison();void pairing?.session.close().catch(()=>{});};
   for (const action of ['start', 'step']) $('c-' + action).addEventListener('click', act(async () => {
     if (!comparison.view.locked) comparison.configure(settings()); await comparison[action](); await pairing?.refresh();
   }));
   for (const action of ['pause', 'stop', 'reset', 'replay']) $('c-' + action).addEventListener('click', act(async() => {comparison[action]();if(action==='reset'&&pairing?.session.state.admission?.mode==='project-limit-browser')await pairing.refresh();}));
   $('c-export').addEventListener('click', act(() => { onExport(comparison.exportRun()); text('c-announcement', 'Exported own saved visual frames. Private sequences omitted.'); }));
-  globalThis.addEventListener?.('blur',()=>{if(comparison.view.auto||comparison.view.busy)comparison.pause();});
+  win.addEventListener?.('blur',()=>{if(comparison.view.auto||comparison.view.busy)comparison.pause();});
+  win.addEventListener?.('pagehide',event=>{if(event?.persisted){if(comparison.view.auto||comparison.view.busy)comparison.pause();}else comparison.dispose();});
   doc.addEventListener('visibilitychange', () => { if (doc.hidden && (comparison.view.auto || comparison.view.busy)) comparison.pause(); });
   const rules = briefing(), list = doc.createElement('ol');
   rules.instructions.forEach(instruction => { const li = doc.createElement('li'); li.textContent = instruction; list.append(li); });

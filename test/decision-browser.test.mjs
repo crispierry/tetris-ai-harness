@@ -45,6 +45,43 @@ async function fixture(t,{fetchImpl=upstream(),configuration=config(),httpServer
 async function packet(base='browser',epoch=0){let p;const c=new Controller({sessionId:base,gameEpoch:epoch,provider:{...heuristic(),async decide(x){p=x;throw new Error('capture');}}});await c.step();return p;}
 async function settle(fn){for(let n=0;n<500;n++){if(fn())return;await wait(2);}throw new Error('dummy condition did not settle');}
 
+test('cached page restoration keeps the same grant and counters, authenticates accounting, and never dispatches or re-pairs',async t=>{
+ const oldFetch=globalThis.fetch;
+ for(const [mode,prefix,mount]of [['solo','h',mountHarness],['comparison','c',mountComparison],['versus','v',mountVersus]]){
+  let calls=0,registrations=0,holdRead=false,releaseRead,enteredRead;
+  const f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})}),nodes=new Map(),listeners=new Map(),frames=new Map();let serial=0;
+  const $=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
+  for(const [k,v]of Object.entries(DEFAULT_CONFIG))$('c-'+k).value=String(v);
+  const win={addEventListener(k,fn){if(!listeners.has(k))listeners.set(k,[]);listeners.get(k).push(fn);},requestAnimationFrame(fn){frames.set(++serial,fn);return serial;},cancelAnimationFrame(id){frames.delete(id);}};
+  const emit=(name,event)=>listeners.get(name)?.forEach(fn=>fn(event));
+  globalThis.fetch=async(route,o={})=>{
+   if(route.startsWith('http'))return oldFetch(route,o);
+   if(holdRead&&route==='/decision/control'&&JSON.parse(o.body).action==='runStatus'){enteredRead();await new Promise(r=>releaseRead=r);}
+   const response=await oldFetch(f.origin+route,{...o,headers:{origin:f.origin,...o.headers}});
+   if(route==='/decision/pair/register'&&response.ok){registrations++;const challenge=await response.clone().json();await f.owner.command({action:'approve',challengeId:challenge.challengeId,...JSON.parse(o.body)});}
+   return response;
+  };
+  const mounted=mount({getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false,hasFocus:()=>true},{window:win});
+  try{
+   const select=$(mode==='comparison'?'c-right':prefix+'-provider');select.value='openai';await select.trigger('change');
+   await $('decision-pairing').children[1].trigger('click');await $(prefix+'-step').trigger('click');assert.equal(calls,1);
+   const before=f.store.snapshot(),json=mounted.exportRun?.()??mounted.runner.exportRun();
+   emit('pagehide',{persisted:true});
+   assert(Object.values(f.store.snapshot().runs).filter(r=>r.controllerSessionBase!=='browser').every(r=>!r.closed));
+   const waiting=new Promise(r=>enteredRead=r);holdRead=true;emit('pageshow',{persisted:true});await waiting;
+   assert.equal($(prefix+'-step').disabled,true);assert.match($('decision-pairing').children[2].textContent,/unavailable|stale/);
+   holdRead=false;releaseRead();await settle(()=>!$(prefix+'-step').disabled);
+   assert.equal(calls,1);assert.equal(registrations,1);assert.deepEqual(f.store.snapshot().used,before.used);
+   assert.equal(mounted.exportRun?.()??mounted.runner.exportRun(),json);
+   assert.match($('decision-pairing').children[2].textContent,/999 session requests remain/);
+   emit('pagehide',{persisted:true});
+   await f.store.transact(s=>{s.browserSession={version:1,ownerHold:true,reconciliationRequired:true,reason:'request_interrupted'};});
+   emit('pageshow',{persisted:true});await settle(()=>/request interrupted/.test($('decision-pairing').children[2].textContent));
+   assert.equal($(prefix+'-step').disabled,true);assert.equal(calls,1);assert.equal(registrations,1);
+  }finally{releaseRead?.();mounted.dispose();globalThis.fetch=oldFetch;}
+ }
+});
+
 test('browser flags are explicit exclusive and OFF reads no key; qualification/key/expiry/digest mismatches reject',async t=>{
  let loads=0;assert.equal(await bootstrapBrowserDecisionService({args:[],loadCredential:async()=>{loads++;return dummy;}}),null);assert.equal(loads,0);assert(DEFAULT_BROWSER_DECISION_KEY_FILE.endsWith('/openai.browser.env'));
  for(const args of [['--decision-browser-owner'],['--decision-browser-owner','--decision-browser-config=/x','--decision-live-owner'],['--enroll-decision-browser'],['--decision-browser-config=/x'],['--decision-browser-owner','--decision-browser-config=/x','--decision-fixture-owner']])assert.throws(()=>decisionStartupMode(args));
