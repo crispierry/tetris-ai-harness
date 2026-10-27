@@ -22,6 +22,7 @@ test('actual facade UI controls validate, lock, retain errors, replay without de
   $('c-samples').value='1';$('c-left').value='error';$('c-right').value='local';$('c-pieceCap').value='2';
   await $('c-step').trigger('click'); assert.equal($('c-0-status').textContent,'Error'); assert.equal($('c-1-pieces').textContent,'1');
   assert.equal($('c-left').disabled,true);assert.equal($('c-pieceCap').disabled,true);assert.equal($('c-0-error').hidden,false);
+  assert.equal($('c-0-outcome').textContent,'');assert.match($('c-0-error').textContent,/Deliberate/);
   const board=$('c-0-board').attributes['aria-label'];await $('c-stop').trigger('click'); await $('c-step').trigger('click');
   assert.equal($('c-0-status').textContent,'Error');assert.equal($('c-0-board').attributes['aria-label'],board);assert.equal($('c-1-pieces').textContent,'2');
   assert.match($('c-results').textContent,/Observed: 1/);await $('c-export').trigger('click');assert.equal(exported.summary.observedPairs,1);

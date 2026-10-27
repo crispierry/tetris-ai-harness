@@ -46,11 +46,13 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new decisions or live metrics`
       : `${STATUS[view.state]} · Sample ${view.sample} of ${view.config.samples} · ${view.summary.observedPairs} completed pairs`;
     text('c-progress', progress + (view.config.pieceCap < 1000 ? ' · Abbreviated run' : ''));
+    if($('c-replay-notice'))$('c-replay-notice').hidden=view.mode!=='replay';
     view.lanes.forEach((canonical, index) => {
       if(view.mode!=='replay'&&paid.includes(index))pairings[index]?.observe(canonical.lastDecision?.receipt);
       const p=canonical.error||canonical.recoveryRequired?null:canonical.presentation,lane=p?{...p.before,policy:canonical.policy,assistance:canonical.assistance,search:canonical.search,status:p.phase==='placing'?'placing':'choosing',observation:visual.get(index)??p.before.observation}:canonical;
       const prefix = `c-${index}-`, obs = lane.observation;
       text(prefix + 'heading',pendingOpenAI(index)?'OpenAI Decisions':compactPlayerName(lane.player.name));
+      $(prefix+'heading').title=lane.player.name;
       text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: pendingOpenAI(index) })} · ${lane.assistance}`);
       if(pendingOpenAI(index))text(prefix+'tier',pairings[index]?.session.state.message??'Connect to request local owner approval.');
       for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));

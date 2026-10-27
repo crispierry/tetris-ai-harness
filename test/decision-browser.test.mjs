@@ -23,7 +23,7 @@ import {mountHarness} from '../public/harness-ui.mjs';
 import {mountVersus} from '../public/versus-ui.mjs';
 import {providerPolicy} from '../public/provider-policy.mjs';
 import {providerProvenance} from '../public/provider-provenance.mjs';
-import {browserStatus} from '../public/decision-session.mjs';
+import {browserStatus,connectionSummary} from '../public/decision-session.mjs';
 import {BROWSER_BUDGET_LINE,validBrowserAccounting} from '../public/browser-risk-contract.mjs';
 import {verifyDecisionUIRecord} from '../decision-record-verifier.mjs';
 const dummy='dummy_browser_key_for_offline_tests_only',fingerprint=createHash('sha256').update(dummy).digest('hex');
@@ -44,6 +44,13 @@ async function fixture(t,{fetchImpl=upstream(),configuration=config(),httpServer
 }
 async function packet(base='browser',epoch=0){let p;const c=new Controller({sessionId:base,gameEpoch:epoch,provider:{...heuristic(),async decide(x){p=x;throw new Error('capture');}}});await c.step();return p;}
 async function settle(fn){for(let n=0;n<500;n++){if(fn())return;await wait(2);}throw new Error('dummy condition did not settle');}
+
+test('compact connection copy preserves complete blocking messages and stale accounting',()=>{
+ const state={state:'connected',message:'Live OpenAI connected. Full session details.'},accounting={mode:'project-limit-browser',freshness:'current',remainingAttempts:972,expiresAt:Date.now()+60000};
+ assert.equal(connectionSummary(state,accounting),'Connected · 972 requests left');
+ for(const message of ['OpenAI session expired. No new OpenAI requests will be sent.','OpenAI request interrupted. It may still be billable. Local owner reconciliation is required before more OpenAI play.','Current session counts and billing are unavailable. Previous counts are stale.'])assert.equal(connectionSummary({...state,message},accounting),message);
+ for(const changed of [{freshness:'stale'},{ownerHold:true},{remainingAttempts:0},{expiresAt:Date.now()-1}])assert.equal(connectionSummary(state,{...accounting,...changed}),state.message);
+});
 
 test('cached page restoration keeps the same grant and counters, authenticates accounting, and never dispatches or re-pairs',async t=>{
  const oldFetch=globalThis.fetch;
@@ -73,7 +80,7 @@ test('cached page restoration keeps the same grant and counters, authenticates a
    holdRead=false;releaseRead();await settle(()=>!$(prefix+'-step').disabled);
    assert.equal(calls,1);assert.equal(registrations,1);assert.deepEqual(f.store.snapshot().used,before.used);
    assert.equal(mounted.exportRun?.()??mounted.runner.exportRun(),json);
-   assert.match($('decision-pairing').children[2].textContent,/999 session requests remain/);
+   assert.match($('decision-pairing').children[2].textContent,/999 requests left/);
    emit('pagehide',{persisted:true});
    await f.store.transact(s=>{s.browserSession={version:1,ownerHold:true,reconciliationRequired:true,reason:'request_interrupted'};});
    emit('pageshow',{persisted:true});await settle(()=>/request interrupted/.test($('decision-pairing').children[2].textContent));
@@ -157,7 +164,7 @@ test('all three actual browser-provider exporters verify canonical receipts/null
  const g=await fixture(t,{httpServer:true});const v=new HumanVersus({providerFactory:()=>g.bridge});await v.stepAlgorithm();v.start();v.tick(20);v.input('drop');v.pause();await settle(()=>!v.view.busy);json=v.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);v.dispose();
  const h=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})}),oldFetch=globalThis.fetch,nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
  globalThis.fetch=async(route,o={})=>{const response=await oldFetch(h.origin+route,{...o,headers:{origin:h.origin,...o.headers}});if(route==='/decision/pair/register'&&response.ok){const challenge=await response.clone().json(),body=JSON.parse(o.body);await h.owner.command({action:'approve',challengeId:challenge.challengeId,...body});}return response;};
- const mounted=mountHarness({getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},{window:{addEventListener(){}}});try{$('h-provider').value='openai';$('h-provider').trigger('change');await $('decision-pairing').children[1].trigger('click');assert.equal(mounted.controller.view.pieces,0);assert.equal($('decision-budget-risk').textContent,BROWSER_BUDGET_LINE);assert.equal($('decision-budget-risk').hidden,false);assert.match($('decision-pairing').children[2].textContent,/1,000 session requests remain/);await $('h-step').trigger('click');json=mounted.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);for(const secret of [dummy,fingerprint,'proj_dummy_browser','dummy private project evidence','dummy approval'])assert(!json.includes(secret));const r=JSON.parse(json);assert.equal(r.events.find(e=>e.input.receipt).input.receipt.reservedInputTokens,null);const mutate=structuredClone(r);mutate.lanes[0].policy.spendControl.riskAccepted=false;assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(mutate)));}finally{mounted.dispose();globalThis.fetch=oldFetch;}
+ const mounted=mountHarness({getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},{window:{addEventListener(){}}});try{$('h-provider').value='openai';$('h-provider').trigger('change');await $('decision-pairing').children[1].trigger('click');assert.equal(mounted.controller.view.pieces,0);assert.equal($('decision-budget-risk').textContent,BROWSER_BUDGET_LINE);assert.equal($('decision-budget-risk').hidden,false);assert.match($('decision-pairing').children[2].textContent,/1,000 requests left/);await $('h-step').trigger('click');json=mounted.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);for(const secret of [dummy,fingerprint,'proj_dummy_browser','dummy private project evidence','dummy approval'])assert(!json.includes(secret));const r=JSON.parse(json);assert.equal(r.events.find(e=>e.input.receipt).input.receipt.reservedInputTokens,null);const mutate=structuredClone(r);mutate.lanes[0].policy.spendControl.riskAccepted=false;assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(mutate)));}finally{mounted.dispose();globalThis.fetch=oldFetch;}
 });
 
 
@@ -250,6 +257,7 @@ test('actual selectors independently pair both OpenAI lanes and keep lookahead s
  try{
   $('c-samples').value='2';$('c-pieceCap').value='1';$('c-left').value='openai';await $('c-left').trigger('change');$('c-right').value='openai';await $('c-right').trigger('change');
   await $('decision-pairing-left').children[1].trigger('click');assert.equal($('c-start').disabled,true);await $('decision-pairing').children[1].trigger('click');assert.equal($('c-start').disabled,false);assert.equal($('decision-budget-risk').hidden,false);
+  assert.equal($('decision-pairing').children[1].hidden,true);assert.equal($('decision-pairing-left').children[1].hidden,true);assert.match($('decision-pairing').children[5].children[1].textContent,/Session ends:/);
   await $('c-step').trigger('click');assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(calls,2);assert.match($('decision-cost').textContent,/0\.0002/);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);
   await $('c-step').trigger('click');assert.equal(calls,4);assert.match($('decision-cost').textContent,/0\.0004/);assert.equal(verifyDecisionUIRecord(c.exportRun()).samples,2);
   await $('c-reset').trigger('click');$('c-left').value='look2';await $('c-left').trigger('change');assert.equal($('c-nodeCap').disabled,false);assert.equal($('c-timeMs').disabled,false);assert.equal($('c-start').disabled,false);

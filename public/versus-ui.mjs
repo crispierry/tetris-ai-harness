@@ -29,9 +29,11 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     if($('v-provider'))$('v-provider').disabled=view.frameCount>0;
     const pendingOpenAI=view.mode!=='replay'&&!!pairing&&$('v-provider')?.value==='openai'&&pairing.session.state.state!=='connected';
     if($('v-1-heading'))text('v-1-heading',pendingOpenAI?'OpenAI Decisions':compactPlayerName(view.lanes[1].player.name));
+    if($('v-1-heading'))$('v-1-heading').title=view.lanes[1].player.name;
     const unavailable=view.mode!=='replay'&&$('v-provider')?.value==='openai'&&(pairing?.session.state.state!=='connected'||(pairing?.blocked&&!view.lanes[1].outcome));
     text('v-1-provenance', providerProvenance(view.policies?.[1], { recorded: view.mode === 'replay', pending: unavailable && (pairing?.session.state.message ?? true) }));
     const replay = view.mode === 'replay', finished = view.state === 'completed', archiveBlocked = !replay && !!view.archiveError;
+    if($('v-replay-notice'))$('v-replay-notice').hidden=!replay;
     $('v-start').disabled = finished || view.running || view.busy || view.playback || archiveBlocked || unavailable;
     text('v-start', replay ? 'Play saved frames' : view.state === 'ready' ? 'Start' : 'Resume');
     $('v-pause').disabled = !view.running && !view.busy && !view.playback;
