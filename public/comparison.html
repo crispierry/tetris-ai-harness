@@ -28,8 +28,9 @@
 <div class="comparison-lanes">
 <section class="lane" aria-labelledby="c-0-heading">
 <div class="lane-heading">
-<h2 id="c-0-heading">Local heuristic</h2>
+<h2 id="c-0-heading">Lookahead · 1</h2>
 <span id="c-0-status" class="lane-status">Ready</span>
+<time id="c-0-clock" class="run-clock" datetime="PT0S" title="Active play time · pauses excluded" aria-label="Active play time 00:00.0">00:00.0</time>
 </div>
 <div id="c-0-board" class="comparison-board" role="img" aria-label="Empty Tetris board">
 </div>
@@ -61,8 +62,9 @@
 </section>
 <section class="lane" aria-labelledby="c-1-heading">
 <div class="lane-heading">
-<h2 id="c-1-heading">Lookahead depth 1</h2>
+<h2 id="c-1-heading">Lookahead · 2</h2>
 <span id="c-1-status" class="lane-status">Ready</span>
+<time id="c-1-clock" class="run-clock" datetime="PT0S" title="Active play time · pauses excluded" aria-label="Active play time 00:00.0">00:00.0</time>
 </div>
 <div id="c-1-board" class="comparison-board" role="img" aria-label="Empty Tetris board">
 </div>
@@ -95,26 +97,21 @@
 </div>
 <aside class="control-rail" aria-label="Comparison setup">
 <div class="player-settings">
-<label for="c-left">Left player</label>
-<select id="c-left">
-<option value="local">Local heuristic</option>
-<option value="look1">Lookahead depth 1</option>
-<option value="look2">Lookahead depth 2</option>
-<option value="delay">Delayed mock</option>
-<option value="error">Error mock</option>
-<option value="openai">OpenAI Decisions</option>
-</select>
-<label for="c-right">Right player</label>
-<select id="c-right">
-<option value="local">Local heuristic</option>
-<option value="look1" selected>Lookahead depth 1</option>
-<option value="look2">Lookahead depth 2</option>
+<div class="player-choice"><label for="c-left">Left player</label>
+<select id="c-left"><option value="lookahead" selected>Lookahead</option>
 <option value="openai">OpenAI Decisions</option>
 <option value="delay">Delayed mock</option>
-<option value="error">Error mock</option>
-</select>
+<option value="error">Error mock</option></select>
+<label class="depth-control" for="c-leftDepth">Depth<select id="c-leftDepth" aria-label="Left depth"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label></div>
+<div class="player-choice"><label for="c-right">Right player</label>
+<select id="c-right"><option value="lookahead" selected>Lookahead</option>
+<option value="openai">OpenAI Decisions</option>
+<option value="delay">Delayed mock</option>
+<option value="error">Error mock</option></select>
+<label class="depth-control" for="c-rightDepth">Depth<select id="c-rightDepth" aria-label="Right depth"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label></div>
 </div>
 <div class="play-toolbar">
+<label class="gravity-toggle" for="c-gravity" title="Keep falling while the computer thinks. Reset to change."><span>Gravity</span><input id="c-gravity" type="checkbox" role="switch" checked aria-describedby="c-gravity-help"></label>
 <p id="decision-cost" class="test-cost" hidden>
 </p>
 <p id="decision-cost-note" class="note" hidden>
@@ -129,6 +126,11 @@
 </div>
 <button id="c-reset" class="button button-quiet">Reset</button>
 </div>
+<section id="c-speed-summary" class="speed-summary" aria-labelledby="c-speed-heading" hidden>
+<h3 id="c-speed-heading">Run finished</h3>
+<p id="c-speed-text"></p>
+<p id="c-speed-detail" class="note"></p>
+</section>
 <p id="c-replay-notice" class="replay-notice" hidden>Saved replay · No new requests</p>
 <p id="c-error" class="comparison-error" role="alert" hidden>
 </p>
@@ -187,6 +189,9 @@
 <details>
 <summary>How this works</summary>
 <p class="note">Clear 300 lines. Every 10 lines raises the level, up to 30. Start continues; Stop retains the board. Reset repeats the sequence.</p>
+<p id="c-gravity-help" class="note">Gravity keeps pieces falling while the computer thinks. Once it chooses, the piece hard-drops, like Space. Turn it off for simulations. Reset to change.</p>
+<p class="note">Depth counts the current piece and visible next pieces, up to six total. Lookahead keeps four promising branches at each step; deeper search does not guarantee better play.</p>
+<p class="note">Clocks measure active play, including thinking, queue waits, falling and animation. Pauses and time between manual steps are excluded. Finish summaries describe this run only.</p>
 <div id="c-rules">
 </div>
 </details>

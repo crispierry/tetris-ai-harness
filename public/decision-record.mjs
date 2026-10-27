@@ -56,7 +56,7 @@ export class DecisionJournal {
  }
  exportRun({metadata={accounting:null}}={}) {
   const finals=this.#lanes.map(l=>{const last=this.#events.findLast(e=>e.lane===l.id)??l.initial;
-   const o=last.observation;let outcome=o.status==='won'?'won':o.status==='over'?'over':last.pieces>=this.#cap?'capped':this.#events.findLast(e=>e.lane===l.id&&['error','cancel','computer'].includes(e.input.kind))?.input.kind==='error'?'error':this.#events.findLast(e=>e.lane===l.id&&['error','cancel','computer'].includes(e.input.kind))?.input.kind==='cancel'?'cancelled':this.#archive?'archive':'incomplete';
+   const o=last.observation,attempt=this.#events.findLast(e=>e.lane===l.id&&['error','cancel','computer','gravity'].includes(e.input.kind))?.input;let outcome=o.status==='won'?'won':o.status==='over'?'over':last.pieces>=this.#cap?'capped':(attempt?.kind==='error'||attempt?.kind==='gravity'&&attempt.outcome==='error')?'error':(attempt?.kind==='cancel'||attempt?.kind==='gravity'&&attempt.outcome==='cancel')?'cancelled':this.#archive?'archive':'incomplete';
    return {lane:l.id,observation:o,pieces:last.pieces,status:last.status,outcome,censored:!['won','over'].includes(outcome)};});
   const record={version:DECISION_RECORD_VERSION,mode:this.#mode,rulesVersion:RULES.version,schemas:VERSIONS,
    objective:{targetLines:300,startLevel:1,maxLevel:30},pieceCap:this.#cap,lanes:this.#lanes,events:this.#events,finals,metadata:copy(metadata),

@@ -10,7 +10,7 @@ function checkReceipt(receipt){assert.ok(receipt);assert.equal(receipt.errorCode
 for(const depth of [1,2])for(const automatic of [false,true]) {
  test(`comparison successful look${depth} ${automatic?'automatic play':'Step'} retains committed frame/export/replay`,async()=>{
   const unhandled=[];const onUnhandled=e=>unhandled.push(e);process.on('unhandledRejection',onUnhandled);
-  let calls=0;const c=new Comparison({config:{left:'local',right:depth===1?'look1':'look2',pieceCap:1,nodeCap:4000,timeMs:1000,paceMs:30},providerFactory:(key,config)=>{const provider=providerFor(key,config);return {...provider,get lastReceipt(){return provider.lastReceipt;},get lastSearch(){return provider.lastSearch;},async decide(...args){calls++;return provider.decide(...args);}};}});
+  let calls=0;const c=new Comparison({config:{gravity:false,left:'local',right:depth===1?'look1':'look2',pieceCap:1,nodeCap:4000,timeMs:1000,paceMs:30},providerFactory:(key,config)=>{const provider=providerFor(key,config);return {...provider,get lastReceipt(){return provider.lastReceipt;},get lastSearch(){return provider.lastSearch;},async decide(...args){calls++;return provider.decide(...args);}};}});
   try {
    if(automatic){c.start();await until(()=>c.view.state==='completed');}else await c.step();
    assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(c.view.state,'completed');

@@ -82,7 +82,7 @@ test('captured frozen v1 fixture keeps original packet hashes and replays only u
   for(const changed of [{rulesVersion:RULES.version},{promptVersion:'local-rules-brief-2'},{version:'unknown'},{objective:RULES.objective}]) await assert.rejects(replayRun({...artifact.manifest,...changed},artifact.runs[0],2));
 });
 test('comparison win freezes independently while an errored peer stays inspectable; replay makes no new decisions', async () => {
-  let calls=0;const c=new Comparison({config:{left:'local',right:'local'},providerFactory:(key,config,{lane})=>{
+  let calls=0;const c=new Comparison({config:{gravity:false,left:'local',right:'local'},providerFactory:(key,config,{lane})=>{
     const local=heuristic();return {...local,async decide(p){calls++;if(lane===1)throw new Error('Independent test error');return local.decide(p);}};
   }});
   for(let n=0;n<1000 && c.view.lanes[0].status!=='won';n++) await c.step();

@@ -30,10 +30,10 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
     if (!response.ok) fail(typeof result.error === 'string' && /^[a-z_]{1,40}$/.test(result.error) ? result.error : 'unavailable'); return result;
   }
   async function boundedControl(work){const abort=new AbortController();let timer;try{return await Promise.race([work(abort.signal),new Promise((_,reject)=>{timer=setTimeout(()=>{abort.abort();reject(Object.assign(new Error('confirmation_timeout'),{code:'confirmation_timeout'}));},1500);})]);}finally{clearTimeout(timer);abort.abort();}}
-  async function confirmCommitted(requestId){
+  async function confirmCommitted(requestId,gravityResult){
     const job=active;if(!browser||!job?.awaitingCommit||!job.committed||job.requestId!==requestId)fail('confirmation_state');
     try{
-      await boundedControl(async signal=>{const accepted=await post('/decision/control',{action:'acceptDecision',requestId},signal);if(accepted.accepted!==true||active!==job||closed)fail('confirmation_state');active=null;invalidate();const value=immutable(await post('/decision/control',{action:'runStatus'},signal));if(!validBrowserAccounting(value)||closed)fail('schema');status=value;freshness='current';notify();});
+      await boundedControl(async signal=>{const accepted=await post('/decision/control',gravityResult?{action:'settleGravity',requestId,...gravityResult}:{action:'acceptDecision',requestId},signal);if(accepted.accepted!==true||active!==job||closed)fail('confirmation_state');active=null;invalidate();const value=immutable(await post('/decision/control',{action:'runStatus'},signal));if(!validBrowserAccounting(value)||closed)fail('schema');status=value;freshness='current';notify();});
     }catch(error){confirmationUncertain=true;requiresReset=true;if(active===job)active=null;invalidate();await boundedControl(signal=>post('/decision/control',{action:'interrupt',requestId},signal)).catch(()=>{});throw error;}
   }
   return Object.freeze({name:'OpenAI Decisions (server bridge)',kind:'remote',version:'decisions-http-1',
@@ -42,13 +42,15 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
     get controllerBinding() {return immutable({sessionId:base,gameEpoch:grant.epoch});},
     status:refreshStatus,
     confirmCommitted:browser?confirmCommitted:undefined,
+    confirmGravity:browser?(requestId,result)=>confirmCommitted(requestId,result):undefined,
     invalidateAccounting:invalidate,
     async close() {closed=true;active=null;receipt=null;invalidate();const result=await post('/decision/control',{action:'close'});await Promise.allSettled([...statusReads]);return result;},
     get requiresReset(){return requiresReset||active?.dispatched===true;},
     get blocked(){return browser&&(confirmationUncertain||!!active||freshness!=='current'||browserBlocked(status));},
     get lastReceipt() { return receipt; },
-    async decide(packet,{signal}={}) {
+    async decide(packet,{signal,gravity=false}={}) {
       if(closed)fail('cancelled');
+      if(gravity&&!browser)fail('gravity_unsupported');
       if(browser&&(confirmationUncertain||active))fail('reconciliation_required');
       if(browser&&freshness!=='current')await refreshStatus();
       if(browser&&browserBlocked(status))fail('reconciliation_required');
@@ -76,7 +78,7 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
           epoch = target;requiresReset=false;
         }
         if (new TextEncoder().encode(JSON.stringify({packet})).length > 1048576) fail('size');
-        job.dispatched=true;let result;try{result=await post('/decision/choice',{packet},signal);current();
+        job.dispatched=true;let result;try{result=await post('/decision/choice',{packet,...(gravity?{gravity:true}:{})},signal);current();
         const choice=result.choice;
         if (!choice || Object.keys(choice).length!==3 || choice.requestId!==packet.requestId || choice.stateRevision!==packet.stateRevision || !packet.candidates.some(c=>c.id===choice.selectedCandidateId) || new TextEncoder().encode(JSON.stringify(choice)).length>4096) fail('schema');
         if (job.id >= receiptSerial) { receipt=compactReceipt(result.receipt); receiptSerial=job.id; }

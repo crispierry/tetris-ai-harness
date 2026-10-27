@@ -1,4 +1,7 @@
-import {placementEvent,depth2Error} from './placement-motion.mjs';
+import {RunClock} from './run-timing.mjs';
+import {GravityController} from './gravity-controller.mjs';
+import {gravityPolicy} from './ai-gravity.mjs';
+import {placementEvent,placementBeforeView,depth2Error} from './placement-motion.mjs';
 import { providerPolicy, compactReceipt, localSearchReceipt } from './provider-policy.mjs';
 import { DecisionJournal } from './decision-record.mjs';
 import { createGame, start, move, rotate, softDrop, hardDrop, tick, togglePause, DEFAULT_SEED, RULES } from './engine.mjs';
@@ -42,41 +45,43 @@ let instance = 0;
 export class HumanVersus {
   #id = ++instance; #session = 0; #human; #revision = 0; #pieces = 0; #humanOutcome = null;
   #externalPolicy=null; #ai; #aiOutcome = null; #provider; #factory; #epoch = 0; #timer = null; #state = 'ready';
-  #pieceCap; #paceMs; #onChange; #frames = []; #bytes = 0; #recording = false; #archiveError = null;
+  #runClock; #timedPieces=0; #clock; #gravity; #pieceCap; #paceMs; #onChange; #frames = []; #bytes = 0; #recording = false; #archiveError = null;
   #onPlacement; #presentation=null; #capture=false; #before=null; #motion=null; #algorithmElapsedMs = 0; #humanGravityMs = 0; #journal=null; #savedExport=null;
   #mode = 'live'; #replayLanes = []; #replayIndex = -1; #playback = false;
-  constructor({ pieceCap = 1000, paceMs = 500, providerFactory = () => heuristic(), onChange = () => {},onPlacement=null } = {}) {
+  constructor({ clock, gravity=false, pieceCap = 1000, paceMs = 500, providerFactory = () => heuristic(), onChange = () => {},onPlacement=null } = {}) {
     if (!Number.isInteger(pieceCap) || pieceCap < 1 || pieceCap > 1000 || !Number.isInteger(paceMs) || paceMs < 150 || paceMs > 1000) throw new RangeError('Bounded piece cap and algorithm pace required.');
-    this.#pieceCap = pieceCap; this.#paceMs = paceMs; this.#factory = providerFactory; this.#onChange = onChange;this.#onPlacement=onPlacement; this.#setup();
+    if(typeof gravity!=='boolean')throw new TypeError('Gravity must be on or off.');this.#clock=clock;this.#gravity=gravity;this.#pieceCap = pieceCap; this.#paceMs = paceMs; this.#factory = providerFactory; this.#onChange = onChange;this.#onPlacement=onPlacement; this.#setup();
   }
+  get timing(){return freeze({replay:this.#mode==='replay',lanes:[{lane:1,...this.#runClock.view,pieces:this.#timedPieces}]});}
   #setup() {
+    this.#runClock=new RunClock({now:this.#clock?.now??(()=>performance.now())});this.#timedPieces=0;
     this.#human = createGame(DEFAULT_SEED); this.#revision = 0; this.#pieces = 0;
     this.#humanOutcome = null; this.#aiOutcome = null; this.#provider = this.#factory();this.#externalPolicy=this.#provider.kind==='remote'?providerPolicy(this.#provider):null;
     if (!['local', 'mock', 'remote'].includes(this.#provider?.kind)) throw new Error('Only local or test-mock algorithms are supported.');
-    const controller = new Controller({ seed: DEFAULT_SEED, sessionId: this.#provider.controllerBinding?.sessionId ?? `versus-${this.#id}-${this.#epoch}`,gameEpoch:this.#provider.kind==='remote'?this.#session:0,
-      provider: this.#provider, deadlineMs: VERSUS_LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(1,input,view);}, onChange:view=>{if(this.#capture&&view.busy&&!this.#before){this.#before=view;this.#presentation={phase:'choosing',before:view};}if(this.#ai===controller)this.#emit();} });
+    const controller = new (this.#gravity?GravityController:Controller)({ seed: DEFAULT_SEED, sessionId: this.#provider.controllerBinding?.sessionId ?? `versus-${this.#id}-${this.#epoch}`,gameEpoch:this.#provider.kind==='remote'?this.#session:0,
+      provider: this.#provider,pieceCap:this.#pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: VERSUS_LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(1,input,view);}, onChange:view=>{if(this.#ai===controller){this.#runClock.record(view.lastDecision);this.#timedPieces=view.pieces;}if(this.#capture&&view.busy&&!this.#before){const before=this.#gravity?placementBeforeView(view):view;if(before){this.#before=before;this.#presentation={phase:before.status==='placing'?'placing':'choosing',before};}}if(this.#ai===controller)this.#emit();} });
     this.#ai = controller;
-    this.#journal=this.#provider.kind==='remote'?new DecisionJournal({mode:'versus',pieceCap:this.#pieceCap}):null;this.#savedExport=null;
+    this.#journal=(this.#provider.kind==='remote'||this.#gravity)?new DecisionJournal({mode:'versus',pieceCap:this.#pieceCap}):null;this.#savedExport=null;
     this.#journal?.addLane(0,'human',this.#humanView(),this.#policies()[0]);
     this.#journal?.addLane(1,'computer',this.#ai.view,this.#policies()[1]);
   }
-  configure(providerFactory) {if(this.#recording)throw new Error('Settings are locked until Reset.');this.#factory=providerFactory;this.#setup();this.#emit();}
+  configure(providerFactory,{gravity=this.#gravity}={}) {if(this.#recording)throw new Error('Settings are locked until Reset.');if(typeof gravity!=='boolean')throw new TypeError('Gravity must be on or off.');this.#gravity=gravity;this.#factory=providerFactory;this.#setup();this.#emit();}
   #humanView() {
     return freeze({ observation: observe(this.#human, { sessionId: `human-${this.#id}-${this.#session}`, revision: this.#revision }),
       status: this.#humanOutcome?.status ?? (this.#state === 'stopped' && this.#human.status !== 'ready' ? 'stopped' : this.#human.status),
       pieces: this.#pieces, player: { name: 'Human', kind: 'human', version: 'manual-focused-clock-1' },
       outcome: this.#humanOutcome, error: null, lastDecision: null, busy: false });
   }
-  #aiView() { return freeze({ ...this.#ai.view,presentation:this.#presentation,error:depth2Error(this.#provider,this.#ai.view.error,'versus'), status: this.#aiOutcome?.status ?? this.#ai.view.status, outcome: this.#aiOutcome }); }
+  #aiView() { return freeze({ ...this.#ai.view,presentation:this.#presentation,error:depth2Error(this.#provider,this.#ai.view.error,'versus'), status: this.#aiOutcome?.status ?? this.#ai.view.status, outcome: this.#aiOutcome,timing:this.#runClock.view }); }
   #policies() {
     return freeze([{ version: 'manual-focused-clock-1', kind: 'human', rulesVersion: RULES.version,
       timing: 'Real gravity in focused running play; independent of algorithm choosing; elapsed chunks at most250ms', pieceCap: this.#pieceCap },
-    this.#provider.kind==='remote'?this.#externalPolicy:{ version: this.#provider.version, kind: this.#provider.kind, rulesVersion: RULES.version,
+    this.#gravity?gravityPolicy(providerPolicy(this.#provider)):this.#provider.kind==='remote'?this.#externalPolicy:this.#provider.runMetadata?.search?.version==='visible-beam-search-1'?providerPolicy(this.#provider):{ version: this.#provider.version, kind: this.#provider.kind, rulesVersion: RULES.version,
       assistance: 'canonical-afterstates-v1', weights: this.#provider.kind === 'local' && this.#provider.version === 'heuristic-2' ? HEURISTIC_WEIGHTS : null,
       paceMs: this.#paceMs, deadlineMs: VERSUS_LIMITS.deadlineMs, pieceCap: this.#pieceCap, live: false }]);
   }
   get view() {
-    return freeze({ version: VERSUS_VERSION, state: this.#state, mode: this.#mode,
+    return freeze({ version: VERSUS_VERSION, gravity:this.#gravity, state: this.#state, mode: this.#mode,
       lanes: this.#mode === 'replay' ? [...this.#replayLanes] : [this.#humanView(), this.#aiView()],
       running: this.#state === 'running', busy: (this.#mode === 'live'&&this.#ai.view.busy)||!!this.#motion,
       policies: this.#policies(), limits: { ...VERSUS_LIMITS, pieces: this.#pieceCap, paceMs: this.#paceMs },
@@ -89,6 +94,7 @@ export class HumanVersus {
     catch{this.#haltArchive();return false;}
   }
   #fence(stop = false) {
+    if(this.#aiOutcome)this.#runClock.finish();else this.#runClock.pause();
     this.#epoch++;this.#presentation=null;this.#capture=false;this.#before=null;this.#motion?.abort();this.#motion=null;this.#replayLanes=this.#replayLanes.map(l=>l?.presentation?freeze({...l,presentation:null}):l); this.#playback = false; clearTimeout(this.#timer); this.#timer = null;
     if (this.#human.status === 'playing') { const next=togglePause(this.#human);if(this.#recordHuman(next,{kind:stop?'stop':'pause'},{status:stop?'stopped':'paused'})){this.#human=next;this.#revision++;} }
     if (!this.#aiOutcome) this.#ai[stop ? 'stop' : 'pause']();
@@ -181,7 +187,7 @@ export class HumanVersus {
   }
   async #oneAI(epoch) {
     if (epoch !== this.#epoch || this.#aiOutcome || (this.#ai.view.busy||this.#motion) || !this.#capacity()) return;
-    const controller = this.#ai;
+    const controller = this.#ai;this.#runClock.start();
     this.#capture=!!this.#onPlacement;this.#before=null;const previousPieces=controller.view.pieces;
     const started = performance.now();
     await controller.step({ continueRunning: this.#state === 'running' });
@@ -192,12 +198,12 @@ export class HumanVersus {
     if (v.status === 'error' || v.status === 'over' || v.status === 'won' || v.pieces >= this.#pieceCap) this.#aiOutcome = this.#outcome(v);
     this.#record(1, this.#aiOutcome ? 'outcome' : 'placement');
     if(this.#onPlacement&&this.#before&&v.pieces===previousPieces+1&&!v.error&&!v.recoveryRequired){const job=new AbortController();this.#motion=job;this.#presentation={phase:'placing',before:this.#before};this.#emit();try{await Promise.race([Promise.resolve(this.#onPlacement(placementEvent(this.#before,v,{lane:1,generation:epoch,signal:job.signal}))),new Promise(r=>job.signal.addEventListener('abort',r,{once:true}))]);}catch{}finally{if(this.#motion===job)this.#motion=null;}if(epoch!==this.#epoch||controller!==this.#ai)return;}
-    this.#presentation=null;this.#before=null;this.#finish(); this.#emit();
+    this.#presentation=null;this.#before=null;if(this.#aiOutcome)this.#runClock.finish();else if(this.#state!=='running')this.#runClock.pause();this.#finish(); this.#emit();
   }
   async #runAI(epoch) {
     if (this.#mode !== 'live' || this.#state !== 'running' || epoch !== this.#epoch || this.#aiOutcome) return;
     await this.#oneAI(epoch);
-    if (epoch === this.#epoch && this.#state === 'running' && !this.#aiOutcome) this.#timer = setTimeout(() => this.#runAI(epoch), this.#paceMs);
+    if (epoch === this.#epoch && this.#state === 'running' && !this.#aiOutcome) this.#timer = setTimeout(() => this.#runAI(epoch), this.#gravity?0:this.#paceMs);
   }
   async stepAlgorithm() {
     if(this.#motion)return;
@@ -219,7 +225,7 @@ export class HumanVersus {
   async #nextReplay() {
     if (this.#replayIndex + 1 >= this.#frames.length) { this.#playback = false; this.#emit(); return false; }
     const f=this.#frames[++this.#replayIndex],before=this.#replayLanes[f.lane],after=this.#savedView(f),epoch=this.#epoch;
-    if(this.#onPlacement&&f.lane===1&&before?.observation.active&&after.pieces===before.pieces+1&&after.lastDecision?.candidate?.path){const job=new AbortController();this.#motion=job;this.#replayLanes[f.lane]=freeze({...after,presentation:{phase:'placing',before}});this.#emit();try{await Promise.race([Promise.resolve(this.#onPlacement(placementEvent(before,after,{lane:1,generation:epoch,replay:true,signal:job.signal}))),new Promise(r=>job.signal.addEventListener('abort',r,{once:true}))]);}catch{}finally{if(this.#motion===job)this.#motion=null;}if(epoch!==this.#epoch)return false;}
+    if(!this.#gravity&&this.#onPlacement&&f.lane===1&&before?.observation.active&&after.pieces===before.pieces+1&&after.lastDecision?.candidate?.path){const job=new AbortController();this.#motion=job;this.#replayLanes[f.lane]=freeze({...after,presentation:{phase:'placing',before}});this.#emit();try{await Promise.race([Promise.resolve(this.#onPlacement(placementEvent(before,after,{lane:1,generation:epoch,replay:true,signal:job.signal}))),new Promise(r=>job.signal.addEventListener('abort',r,{once:true}))]);}catch{}finally{if(this.#motion===job)this.#motion=null;}if(epoch!==this.#epoch)return false;}
     this.#replayLanes[f.lane]=after;this.#emit();return true;
   }
   async #playReplay(epoch) {
@@ -228,7 +234,7 @@ export class HumanVersus {
   }
   exportRun() {
     if(this.#mode==='replay'&&this.#savedExport)return this.#savedExport;
-    if(this.#provider.kind==='remote')return this.#mode==='replay'?this.#savedExport:this.#journal.exportRun({metadata:{accounting:this.#provider.runMetadata.accounting}});
+    if(this.#journal)return this.#mode==='replay'?this.#savedExport:this.#journal.exportRun({metadata:{accounting:this.#provider.kind==='remote'?this.#provider.runMetadata.accounting:null}});
     const record = { version: VERSUS_VERSION, frameVersion: 1, rulesVersion: RULES.version,
       objective: RULES.objective, admission: { recording: versusRecordingAdmission(this.#pieceCap), plannedPlacements: 2 * this.#pieceCap,
         maximumAlgorithmDecisionWaitMs: this.#pieceCap * VERSUS_LIMITS.deadlineMs,

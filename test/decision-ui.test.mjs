@@ -29,7 +29,7 @@ async function fixture(t,{mode,lane,hold=false,maxAttempts=8}={}) {
 }
 test('external comparison accepts independent player selection; delayed fixture leaves local peer independent and replay makes zero requests',async t=>{
  assert.equal(validateConfig({left:'openai',right:'openai'}).left,'openai');assert.equal(validateConfig({left:'look1',right:'openai'}).left,'look1');assert.equal(validateConfig({right:'openai',samples:2,pieceCap:10}).samples,2);
- const f=await fixture(t,{mode:'comparison',lane:'right',hold:true});const c=new Comparison({config:{left:'local',right:'openai',pieceCap:3,paceMs:30},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});t.after(()=>c.dispose());
+ const f=await fixture(t,{mode:'comparison',lane:'right',hold:true});const c=new Comparison({config:{gravity:false,left:'local',right:'openai',pieceCap:3,paceMs:30},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});t.after(()=>c.dispose());
  c.start();await until(()=>f.release);await until(()=>c.view.lanes[0].pieces>=2);assert.equal(c.view.lanes[1].pieces,0);assert.equal(c.view.lanes[0].policy.kind,'localHeuristic');assert.equal(c.view.lanes[1].policy.kind,'externalDecisions');assert.ok(!JSON.stringify(c.view.lanes[1].policy).includes('weights'));
  c.pause();assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);f.release();await wait(5);assert.equal(c.view.lanes[1].pieces,0);assert.equal(c.view.lanes[1].recoveryRequired,true);
  c.reset();c.reset();await c.step();assert.equal(c.view.lanes[1].pieces,1);assert.ok(c.view.lanes[1].observation.sessionId.endsWith('-2'));assert.equal(f.calls,2);
@@ -44,7 +44,7 @@ test('external versus human continues during wait; shared pause cancels, repeate
  const calls=f.calls,original=v.exportRun();v.replay();v.pause();await v.stepAlgorithm();v.input('drop');v.tick(250);assert.equal(f.calls,calls);assert.equal(v.exportRun(),original);
 });
 test('request cap consumes no retry/refill; run status is authenticated and read-only',async t=>{
- const f=await fixture(t,{mode:'comparison',lane:'right',maxAttempts:1});const c=new Comparison({config:{left:'local',right:'openai',pieceCap:3},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});t.after(()=>c.dispose());
+ const f=await fixture(t,{mode:'comparison',lane:'right',maxAttempts:1});const c=new Comparison({config:{gravity:false,left:'local',right:'openai',pieceCap:3},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});t.after(()=>c.dispose());
  await c.step();await c.step();assert.equal(f.calls,1);assert.equal(c.view.lanes[1].pieces,1);assert.match(c.view.lanes[1].error,/budget/);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);const before=f.store.snapshot();const status=await f.bridge.status();assert.equal(status.remainingAttempts,0);assert.deepEqual(f.store.snapshot(),before);
  c.reset();await c.step();assert.equal(f.calls,1);assert.equal((await f.bridge.status()).remainingAttempts,0);
 });

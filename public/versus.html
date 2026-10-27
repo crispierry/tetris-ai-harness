@@ -64,8 +64,9 @@
 </section>
 <section class="lane" aria-labelledby="v-1-heading">
 <div class="lane-heading">
-<h2 id="v-1-heading">Local heuristic</h2>
+<h2 id="v-1-heading">Lookahead · 2</h2>
 <span id="v-1-status" class="lane-status">Ready</span>
+<time id="v-1-clock" class="run-clock" datetime="PT0S" title="Active play time · pauses excluded" aria-label="Active play time 00:00.0">00:00.0</time>
 </div>
 <div id="v-1-board" class="comparison-board" role="img" aria-label="Empty Tetris board">
 </div>
@@ -97,16 +98,16 @@
 </section>
 </div>
 <aside class="control-rail" aria-label="Shared play controls">
+<div class="player-settings single-player-settings"><div class="player-choice">
 <label for="v-provider">Computer</label>
-<select id="v-provider">
-<option value="local">Local heuristic</option>
-<option value="look1">Lookahead depth 1</option>
-<option value="look2">Lookahead depth 2</option>
+<select id="v-provider"><option value="lookahead" selected>Lookahead</option>
 <option value="openai">OpenAI Decisions</option>
 <option value="delay">Delayed mock</option>
-<option value="error">Error mock</option>
-</select>
+<option value="error">Error mock</option></select></div>
+<label class="depth-control" for="v-depth">Depth<select id="v-depth"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>
+</div>
 <div class="play-toolbar">
+<label class="gravity-toggle" for="v-gravity" title="Keep falling while the computer thinks. Reset to change."><span>Gravity</span><input id="v-gravity" type="checkbox" role="switch" checked aria-describedby="v-gravity-help"></label>
 <p id="decision-cost" class="test-cost" hidden>
 </p>
 <p id="decision-cost-note" class="note" hidden>
@@ -158,6 +159,8 @@
 <details>
 <summary>How to play</summary>
 <p class="note">Clear 300 lines. Every 10 lines raises the level, up to 30. Start continues; Stop retains the board. Reset repeats the sequence.</p>
+<p id="v-gravity-help" class="note">Gravity keeps pieces falling while the computer thinks. Once it chooses, the piece hard-drops, like Space. Turn it off for simulations. Reset to change.</p>
+<p class="note">Lookahead depth counts the current piece and visible next pieces, up to six total. Search keeps four promising branches at each step.</p>
 <p class="note">Keyboard required. ↓ soft drop; X also rotates. Leaving your board pauses both games. Step computer freezes human time while placing one computer piece.</p>
 </details>
 </aside>
