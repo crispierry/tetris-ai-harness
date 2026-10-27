@@ -1,6 +1,6 @@
 import {placementEvent,depth2Error} from './placement-motion.mjs';
 import { providerPolicy, compactReceipt, localSearchReceipt } from './provider-policy.mjs';
-import { DecisionJournal } from './decision-record.mjs';
+import { DecisionJournal, DECISION_RECORD_LIMITS } from './decision-record.mjs';
 import { Controller, heuristic, mockProvider, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { createLookaheadProvider, LOOKAHEAD_VERSION } from './lookahead.mjs';
 import { freeze, VERSIONS } from './harness.mjs';
@@ -12,7 +12,7 @@ export const LIMITS = freeze({ samples: 8, pieceCap: 1000, paceMin: 30, paceMax:
 export const PLAYERS = freeze({ local: 'Local heuristic', look1: 'Lookahead depth 1', look2: 'Lookahead depth 2',
   delay: 'Delayed mock', error: 'Error mock', openai:'OpenAI Decisions' });
 export const DEFAULT_CONFIG = freeze({ left: 'local', right: 'look1', samples: 1, pieceCap: 1000, paceMs: 150, nodeCap: 4000, timeMs: 500 });
-const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
+const bytes = value => new TextEncoder().encode(typeof value==='string'?value:JSON.stringify(value)).length;
 const copy = value => JSON.parse(JSON.stringify(value));
 let instances = 0;
 export function validateConfig(input = {}) {
@@ -105,7 +105,11 @@ export class Comparison {
         provider, deadlineMs: LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(index,input,view);}, onChange:view => {if(lane.capturing&&view.busy&&!lane.before){lane.before=view;lane.presentation={phase:'choosing',before:view};} if(this.#lanes.includes(lane))this.#emit();} });
       return lane;
     });
-    this.#journal=this.#external?new DecisionJournal({mode:'comparison',pieceCap:this.#config.pieceCap}):null;
+    // Finished samples consume the same recording allowance as the active one.
+    const limits=DECISION_RECORD_LIMITS.comparison;
+    this.#journal=this.#external?new DecisionJournal({mode:'comparison',pieceCap:this.#config.pieceCap,
+      eventLimit:limits.frames-this.#history.reduce((n,r)=>n+r.events.length,0),
+      byteLimit:limits.bytes-this.#history.reduce((n,r)=>n+bytes(r),0)-1024}):null;
     this.#savedExport=null;
     this.#lanes.forEach((lane,i)=>this.#journal?.addLane(i,'computer',lane.controller.view,lane.policy));
   }

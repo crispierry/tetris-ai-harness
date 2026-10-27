@@ -219,6 +219,7 @@ for(const local of ['local','look1','look2','delay','error'])for(const side of [
   await c.step();assert.equal(c.view.lanes[side].pieces,1);assert.equal(c.view.lanes[1-side].pieces,local==='error'?0:1);assert.equal(calls,1);
   const json=c.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);
   if(local.startsWith('look')){const record=JSON.parse(json);const receipt=record.events.find(e=>e.lane===1-side&&e.input.kind==='computer').input.receipt;assert.equal(receipt.errorCode,null);const bad=structuredClone(record);bad.lanes[1-side].policy.search.modelCalls=1;assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(bad)));const badReceipt=structuredClone(record);badReceipt.events.find(e=>e.lane===1-side&&e.input.kind==='computer').input.receipt.requestId='foreign';assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(badReceipt)));}
+  if(local.startsWith('look'))for(const mutate of [q=>q.nodes=0,q=>q.evaluatorCalls=0,q=>q.childrenEnumerated++,q=>q.leavesEvaluated=0]){const bad=JSON.parse(json);mutate(bad.events.find(e=>e.lane===1-side&&e.input.kind==='computer').input.receipt.search);assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(bad)),/search/);}
   c.replay();c.pause();for(let n=0;n<c.view.frameCount;n++)await c.step();assert.equal(calls,1);assert.equal(c.exportRun(),json);
  }finally{c.dispose();}
 });
