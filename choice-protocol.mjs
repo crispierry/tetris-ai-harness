@@ -32,12 +32,12 @@ export function packetCheck(packet, config) {
 }
 export function requestFor(protocol, packet, config) {
   if(protocol==='decisions'&&packet.candidates.length<2)fail('unsupported_candidates');
-  const ids = packet.candidates.map(c => c.id), instructions = protocol === 'decisions'
-    ? 'Select exactly one supplied current legal placement ID as the native placement Choice answer. Use the complete rules, objective and immediate consequences in the public packet; replan on the next turn.'
+  const instructions = protocol === 'decisions'
+    ? 'Select exactly one supplied current legal placement ID as the native placement Choice answer. The goal is to survive long enough to clear 300 lines. Prefer a winning afterstate; avoid blocked-spawn loss when a surviving placement exists. Compare the exact afterstates and the visible next five pieces. Holes are empty cells below occupied cells in a column; heights measure occupied stack height from the bottom; aggregateHeight sums column heights; bumpiness sums adjacent height differences. Avoid creating holes or a tall, uneven stack, and clear lines when that helps survival. Choice descriptions summarize existing candidate evidence, not predicted future rewards. Use the complete rules, objective and immediate consequences in the public packet; replan on the next turn.'
     : 'Choose one legal placement ID using the complete rules, objective and consequences in the supplied public packet.';
   return freeze({ method: 'POST', url: definitions[protocol].endpoint, body: protocol === 'decisions' ? {
     model: config.model, input: JSON.stringify(semanticPacket(packet)), questions: [{ type: 'choice', name: 'placement', instructions,
-      choices: ids.map(value => ({ value, description: 'Legal placement; exact path and consequences are in the input packet.' })) }]
+      choices: packet.candidates.map(c => ({ value:c.id, description:`${c.piece} at (${c.x},${c.y}), rotation ${c.orientation}. After placement: ${c.afterstate.status}; lines cleared ${c.linesDelta}; holes ${c.features.holes} (${c.featureDeltas.holes>=0?'+':''}${c.featureDeltas.holes}); max height ${c.features.maxHeight}; total height ${c.features.aggregateHeight}; bumpiness ${c.features.bumpiness}. Exact board, path and remaining preview are in the input packet.` })) }]
   } : { model: config.model, state: packet, questions: { placement: { type: 'choice', instructions,
     criteria: Object.fromEntries(packet.candidates.map(c => [c.id, c])) } } } });
 }

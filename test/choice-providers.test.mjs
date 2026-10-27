@@ -19,6 +19,25 @@ function success(request, protocol, alter = x => x) {
   return { status: 200, artifactRef: 'fixture:test/choice-providers.test.mjs#success', body: { model: protocol === 'decisions' ? 'gpt-6-luna' : 'jev-1.14.0',
     answers: protocol === 'decisions' ? [answer] : { placement: answer }, usage: { input_tokens: 100, output_tokens: 5 } } };
 }
+test('Decisions options expose distinct canonical consequences without replacing the model choice', async () => {
+  const initial=start(createGame(42)),board=initial.board.map(row=>[...row]);
+  board[19]=Array.from({length:10},(_,x)=>x===5?null:'J');
+  const packet=makePacket({...initial,board,active:{type:'I',rotation:1,x:3,y:0}});
+  const clear=packet.candidates.find(c=>c.linesDelta===1),stack=packet.candidates.find(c=>c.features.holes>0);
+  assert(clear);assert(stack);
+  let request;
+  const adapter=createChoiceAdapter({protocol:'decisions',transport:fixture(async r=>{request=r;return success(r,'decisions');})});
+  const choice=await adapter.decide(packet),question=request.body.questions[0],options=question.choices;
+  assert.deepEqual(JSON.parse(request.body.input),semanticPacket(packet));
+  assert.deepEqual(options.map(c=>c.value),packet.candidates.map(c=>c.id));
+  assert.match(options.find(c=>c.value===clear.id).description,/lines cleared 1; holes 0/);
+  assert.match(options.find(c=>c.value===stack.id).description,new RegExp(`holes ${stack.features.holes} `));
+  assert.notEqual(options.find(c=>c.value===clear.id).description,options.find(c=>c.value===stack.id).description);
+  assert.match(question.instructions,/survive long enough to clear 300 lines/);
+  assert.match(question.instructions,/empty cells below occupied cells/);
+  assert.match(question.instructions,/visible next five pieces/);
+  assert.equal(choice.selectedCandidateId,packet.candidates.at(-1).id);
+});
 for (const protocol of ['decisions', 'jev']) {
   test(`${protocol}: blocking fixture respects minimum adapter/packet deadline and never commits`,async()=>{
     const packet=makePacket();
