@@ -1,17 +1,169 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Human vs local algorithm · Tetris</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/comparison.css"><link rel="stylesheet" href="/modes.css"><link rel="stylesheet" href="/versus.css"><script type="module" src="/versus-ui.mjs"></script></head>
-<body><main class="comparison-shell versus-shell"><header class="page-header"><div><p class="eyebrow">LOCAL ARCADE · OFFLINE</p><h1>Human vs local algorithm</h1></div></header>
-<nav class="mode-nav" aria-label="Play modes"><a href="/">Solo play</a><a href="/harness.html">Solo computer</a><a href="/comparison.html">Algorithm comparison</a><a href="/versus.html" aria-current="page">Human vs algorithm</a></nav>
-<p class="intro-copy">You control the left board. The right board uses a local heuristic, with no live AI or credentials. Both games use the same private piece sequence but progress independently at different speeds. Results are descriptive, not a fair race or winner claim.</p>
-<section class="card setup" aria-label="Shared play controls"><div class="comparison-actions"><button id="v-start" class="button button-primary">Start</button><button id="v-pause" class="button button-secondary" disabled>Pause</button><button id="v-step" class="button button-secondary">Step algorithm</button><button id="v-stop" class="button button-secondary" disabled>Stop</button><button id="v-reset" class="button button-secondary">Reset</button><button id="v-replay" class="button button-secondary" disabled>Replay saved frames</button><button id="v-export" class="button button-secondary" disabled>Export run</button></div>
-<p id="v-progress" class="run-progress">Ready</p><p class="note">Marathon: clear 300 lines. Start at level 1; every 10 lines raises the level, up to level 30. Each board has a 1000-placement safety limit. Algorithm pace: 500 ms between choices; human gravity follows the solo rules. Human play continues while the algorithm chooses. Pause/Stop affect both; Reset repeats the sequence. Step algorithm places one eligible algorithm piece with human time frozen.</p><p id="v-message" class="comparison-error" role="alert" hidden></p></section>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Human vs computer · Tetris</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/comparison.css">
+<link rel="stylesheet" href="/versus.css">
+<link rel="stylesheet" href="/arcade.css">
+<script type="module" src="/arcade-layout.mjs"></script>
+<script type="module" src="/versus-ui.mjs">
+</script>
+</head>
+<body>
+<div class="arcade-shell">
+<header class="arcade-header">
+<h1>Tetris</h1>
+<span>300 lines</span>
+</header>
+<nav class="mode-nav" aria-label="Play modes">
+<a href="/">Solo play</a>
+<a href="/harness.html">Solo computer</a>
+<a href="/comparison.html">Compare</a>
+<a href="/versus.html" aria-current="page">Human vs computer</a>
+</nav>
+<main class="arcade-stage paired-stage">
 <div class="comparison-lanes">
-<section class="card lane" aria-labelledby="v-0-heading"><div class="lane-heading"><h2 id="v-0-heading">Human</h2><span id="v-0-status" class="lane-status">Ready</span></div><p class="note">Focused keyboard play · real gravity</p>
-<div class="lane-content"><div id="v-human-game" class="human-surface" tabindex="0" role="region" aria-label="Human playfield" aria-describedby="v-focus-help v-controls"><div id="v-0-board" class="comparison-board" role="img" aria-label="Human empty board"></div></div><div class="lane-facts"><dl class="lane-metrics"><div><dt>Score</dt><dd id="v-0-score">0</dd></div><div><dt>Lines</dt><dd id="v-0-lines">0</dd></div><div><dt>Level</dt><dd id="v-0-level">1</dd></div><div><dt>Pieces</dt><dd id="v-0-pieces">0</dd></div></dl><h3>Next five</h3><div id="v-0-next" class="comparison-next"></div><p id="v-0-outcome" class="note">Endless score and survival.</p><p id="v-0-error" class="comparison-error" hidden></p></div></div>
-<div class="versus-help"><p id="v-focus-help">Start/Resume focuses your board. Click it to focus again. Leaving this board or window pauses both games; choose Resume to continue.</p><p id="v-controls"><kbd>←</kbd> <kbd>→</kbd> move · <kbd>↓</kbd> soft drop · <kbd>↑</kbd> or <kbd>X</kbd> rotate · <kbd>Space</kbd> hard drop · <kbd>P</kbd> pause/resume. Keys affect only your board.</p></div><details><summary>Human state and policy</summary><pre id="v-0-details"></pre></details></section>
-<section class="card lane" aria-labelledby="v-1-heading"><div class="lane-heading"><h2 id="v-1-heading">Local heuristic · offline</h2><span id="v-1-status" class="lane-status">Ready</span></div><p class="note">Independent local choices · no provider calls</p>
-<div class="lane-content"><div id="v-1-board" class="comparison-board" role="img" aria-label="Algorithm empty board"></div><div class="lane-facts"><dl class="lane-metrics"><div><dt>Score</dt><dd id="v-1-score">0</dd></div><div><dt>Lines</dt><dd id="v-1-lines">0</dd></div><div><dt>Level</dt><dd id="v-1-level">1</dd></div><div><dt>Pieces</dt><dd id="v-1-pieces">0</dd></div></dl><h3>Next five</h3><div id="v-1-next" class="comparison-next"></div><p id="v-1-outcome" class="note">Endless score and survival.</p><p id="v-1-error" class="comparison-error" hidden></p></div></div>
-<p id="v-choice" class="note">No algorithm piece selected yet.</p><details><summary>Algorithm placement and policy</summary><pre id="v-1-details"></pre></details></section>
+<section class="lane" aria-labelledby="v-0-heading">
+<div class="lane-heading">
+<h2 id="v-0-heading">You</h2>
+<span id="v-0-status" class="lane-status">Ready</span>
 </div>
-<section class="card comparison-results"><h2>Saved inspection</h2><p id="v-recording" class="note">No saved frames yet.</p><p class="note">Replay displays this run's own saved visual frames. Human controls and gravity are disabled during replay, and no new algorithm decisions are made. It is not canonical Node verification. Export omits private seeds and hidden queue entries; cost is not measured.</p></section>
-<p id="v-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p><noscript>JavaScript is required for this local game.</noscript></main></body></html>
+<div id="v-human-game" class="human-surface" tabindex="0" role="region" aria-label="Human playfield" aria-describedby="v-focus-help v-controls">
+<div id="v-0-board" class="comparison-board" role="img" aria-label="Empty Tetris board">
+</div>
+</div>
+<dl class="lane-metrics">
+<div>
+<dt>Score</dt>
+<dd id="v-0-score">0</dd>
+</div>
+<div>
+<dt>Lines</dt>
+<dd id="v-0-lines">0 / 300</dd>
+</div>
+<div>
+<dt>Level</dt>
+<dd id="v-0-level">1 / 30</dd>
+</div>
+<div>
+<dt>Pieces</dt>
+<dd id="v-0-pieces">0</dd>
+</div>
+</dl>
+<h3>Next</h3>
+<div id="v-0-next" class="comparison-next">
+</div>
+<p id="v-0-outcome" class="lane-outcome note">
+</p>
+<p id="v-0-error" class="comparison-error" role="alert" hidden>
+</p>
+</section>
+<section class="lane" aria-labelledby="v-1-heading">
+<div class="lane-heading">
+<h2 id="v-1-heading">Local heuristic</h2>
+<span id="v-1-status" class="lane-status">Ready</span>
+</div>
+<div id="v-1-board" class="comparison-board" role="img" aria-label="Empty Tetris board">
+</div>
+<dl class="lane-metrics">
+<div>
+<dt>Score</dt>
+<dd id="v-1-score">0</dd>
+</div>
+<div>
+<dt>Lines</dt>
+<dd id="v-1-lines">0 / 300</dd>
+</div>
+<div>
+<dt>Level</dt>
+<dd id="v-1-level">1 / 30</dd>
+</div>
+<div>
+<dt>Pieces</dt>
+<dd id="v-1-pieces">0</dd>
+</div>
+</dl>
+<h3>Next</h3>
+<div id="v-1-next" class="comparison-next">
+</div>
+<p id="v-1-outcome" class="lane-outcome note">
+</p>
+<p id="v-1-error" class="comparison-error" role="alert" hidden>
+</p>
+</section>
+</div>
+<aside class="control-rail" aria-label="Shared play controls">
+<label for="v-provider">Computer</label>
+<select id="v-provider">
+<option value="local">Local heuristic</option>
+<option value="look1">Lookahead depth 1</option>
+<option value="look2">Lookahead depth 2</option>
+<option value="openai">OpenAI Decisions</option>
+<option value="delay">Delayed mock</option>
+<option value="error">Error mock</option>
+</select>
+<div class="play-toolbar">
+<p id="decision-cost" class="test-cost" hidden>
+</p>
+<p id="decision-cost-note" class="note" hidden>
+</p>
+<p id="decision-budget-risk" class="budget-risk" hidden>
+</p>
+<div class="primary-actions">
+<button id="v-start" class="button button-primary">Start</button>
+<button id="v-pause" class="button button-secondary" disabled>Pause</button>
+<button id="v-step" class="button button-secondary" aria-label="Step computer">Step</button>
+<button id="v-stop" class="button button-secondary" disabled>Stop</button>
+</div>
+<button id="v-reset" class="button button-quiet">Reset</button>
+</div>
+<p id="v-progress" class="run-progress">Ready</p>
+<p id="v-message" class="comparison-error" role="alert" hidden>
+</p>
+<div id="decision-pairing">
+</div>
+<p class="keyboard-hint">← → move · ↑ rotate · Space drop · P pause</p>
+<p id="v-focus-help" class="note">Leaving your board pauses both games.</p>
+<p id="v-controls" class="sr-only">Left and right move. Down soft drops. Up or X rotates. Space hard drops. P pauses. Start focuses your board. Keys affect only your board.</p>
+<details>
+<summary>Run details</summary>
+<div class="archive-actions">
+<button id="v-replay" class="button button-secondary" disabled>Replay</button>
+<button id="v-export" class="button button-secondary" disabled>Export run</button>
+</div>
+<p class="note">Replay uses saved frames without new decisions. Reset clears this recording and repeats the sequence; it does not refill OpenAI allowance. Canonical verification is separate.</p>
+<p id="v-recording" class="note">
+</p>
+<p class="note">You play left. The computer plays right. Same sequence at independent speeds; this is not a fair race. The safety limit is 1000 placements per board.</p>
+<details>
+<summary>Left placement details</summary>
+<pre id="v-0-details">
+</pre>
+</details>
+<details>
+<summary>Right placement details</summary>
+<p id="v-1-provenance" class="note">
+</p>
+<p id="v-choice" class="note">
+</p>
+<pre id="v-1-details">
+</pre>
+</details>
+</details>
+<details>
+<summary>How to play</summary>
+<p class="note">Clear 300 lines. Every 10 lines raises the level, up to 30. Start continues; Stop retains the board. Reset repeats the sequence.</p>
+<p class="note">Keyboard required. ↓ soft drop; X also rotates. Leaving your board pauses both games. Step computer freezes human time while placing one computer piece.</p>
+</details>
+</aside>
+</main>
+<p id="v-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+</p>
+<noscript>JavaScript is required to play.</noscript>
+</div>
+</body>
+</html>

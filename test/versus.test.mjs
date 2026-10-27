@@ -107,7 +107,7 @@ test('all four modes retain direct navigation and current page indication', asyn
   for(const[file,current]of pages){const html=await readFile(new URL('../public/'+file,import.meta.url),'utf8');
     const nav=html.match(/<nav class="mode-nav"[^>]*>(.*?)<\/nav>/s)?.[1];assert(nav,file);
     for(const[,url]of pages)assert(nav.includes(`href="${url}"`),`${file}: ${url}`);
-    assert(nav.includes(`href="${current}" aria-current="page"`));assert.equal((nav.match(/aria-current/g)??[]).length,1);assert(html.includes('/modes.css'));}
+    assert(nav.includes(`href="${current}" aria-current="page"`));assert.equal((nav.match(/aria-current/g)??[]).length,1);assert(html.includes('/arcade.css'));assert(html.includes('/arcade-layout.mjs'));}
 });
 
 test('versus normal-play recording admission covers both 1000-placement lanes, gravity/input allowance and metadata within strict limits',()=>{

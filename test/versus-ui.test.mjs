@@ -31,7 +31,7 @@ test('focused human keyboard/clock remains independent during Choosing; blur fre
 test('AI-only stepping, stop/reset, replay/export and window hiding use the real facade and truthful labels',async()=>{
   const f=fixture();let exported;const m=mountVersus(f.doc,{window:f.win,onExport:json=>{exported=JSON.parse(json);}});
   assert.equal(f.$('v-0-board').children.length,200);await f.$('v-step').trigger('click');
-  assert.equal(f.$('v-0-pieces').textContent,'0');assert.equal(f.$('v-0-status').textContent,'Ready');assert.equal(f.$('v-1-pieces').textContent,'1');assert.equal(f.$('v-step').textContent,'Step algorithm');
+  assert.equal(f.$('v-0-pieces').textContent,'0');assert.equal(f.$('v-0-status').textContent,'Ready');assert.equal(f.$('v-1-pieces').textContent,'1');assert.equal(f.$('v-step').textContent,'Step');
   await f.$('v-start').trigger('click');key(f.$('v-human-game'),' ');assert.equal(f.$('v-0-pieces').textContent,'1');
   f.doc.hidden=true;f.docListeners.visibilitychange();assert.equal(m.runner.view.state,'paused');f.doc.hidden=false;
   await f.$('v-stop').trigger('click');assert.equal(f.$('v-0-pieces').textContent,'1');await f.$('v-export').trigger('click');assert(exported.frames.length>2);assert.equal(exported.provenance.modelCalls,0);

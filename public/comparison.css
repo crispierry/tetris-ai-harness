@@ -10,6 +10,11 @@
 .lane-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}.lane-metrics dt{font-size:.78rem;color:var(--muted)}.lane-metrics dd{margin:2px 0 0;font-size:1.2rem;font-weight:750;font-variant-numeric:tabular-nums}
 .comparison-next{display:flex;flex-wrap:wrap;gap:8px}.comparison-preview{display:flex;flex-direction:column;align-items:center;font-size:.75rem}.comparison-mini{display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);width:32px;height:32px}.comparison-mini .filled{background:var(--piece);border:1px solid #19212d}.comparison-error{color:#ffd2d8;font-weight:600;line-height:1.5}.comparison-results,.rules{margin-top:18px}
 .comparison-shell :is(a,button,input,select,summary):focus-visible{outline:3px solid #f4d476;outline-offset:3px}
+/* Share intrinsic header and description rows so both boards start together. */
+@media(min-width:641px){
+  .comparison-lanes{align-items:stretch;row-gap:0}
+  .comparison-lanes>.lane{display:grid;grid-template-rows:subgrid;grid-row:span 5;row-gap:0}
+}
 @media(max-width:850px){.lane-content{grid-template-columns:minmax(0,1fr)}.comparison-board{width:min(100%,220px);justify-self:center}}
 @media(max-width:640px){.comparison-shell{width:calc(100% - 24px);padding-top:16px}.comparison-shell .page-header{align-items:start;flex-direction:column;gap:12px}.comparison-lanes,.player-settings{grid-template-columns:minmax(0,1fr)}.card{padding:14px}.comparison-shell h1{font-size:1.8rem}.lane-content{grid-template-columns:minmax(0,180px) minmax(0,1fr);gap:12px}}
 @media(max-width:360px){.lane-content{grid-template-columns:minmax(0,1fr)}.lane-facts{width:100%}}

@@ -4,3 +4,5 @@
 .mode-nav a:focus-visible{outline:3px solid #f4d476;outline-offset:4px}
 
 .status,.lane-status,#h-outcome{overflow-wrap:anywhere;white-space:normal}
+
+.decision-pairing{min-inline-size:0}.decision-fingerprint{overflow-wrap:anywhere;max-inline-size:100%}.decision-pairing .button{max-inline-size:100%;margin-block:4px;margin-inline-end:8px}#h-provider,#v-provider{min-block-size:44px}

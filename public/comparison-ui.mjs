@@ -1,9 +1,15 @@
-import { MARATHON_COPY, linesProgress, outcomeDetail, formatNumber } from './marathon.mjs';
-import { Comparison, DEFAULT_CONFIG } from './comparison.mjs';
+import {mountTestCost} from './test-cost.mjs';
+import {compactPlayerName,visibleOutcome} from './arcade-copy.mjs';
+import {createPlacementPresenter} from './placement-motion.mjs';
+import { providerProvenance } from './provider-provenance.mjs';
+import { mountDecisionPairing } from './decision-session.mjs';
+import { providerFor } from './comparison.mjs';
+import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail, formatNumber } from './marathon.mjs';
+import { Comparison, DEFAULT_CONFIG, validateConfig } from './comparison.mjs';
 import { GEOMETRY } from './harness.mjs';
 import { briefing } from './briefing.mjs';
 
-const STATUS = { ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
+const STATUS = { placing:'Placing…',ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
   over: 'Game over', error: 'Error', completed: 'Run finished', won: MARATHON_COPY.complete, capped: 'Capped', replay: 'Saved replay' };
 const SETTINGS = Object.keys(DEFAULT_CONFIG);
 function download(json, doc) {
@@ -11,30 +17,41 @@ function download(json, doc) {
   const link = doc.createElement('a'); link.href = url; link.download = 'tetris-offline-comparison.json';
   doc.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export function mountComparison(doc, { comparisonFactory = options => new Comparison(options), onExport = json => download(json, doc) } = {}) {
+export function mountComparison(doc, { comparisonFactory = options => new Comparison(options), onExport = json => download(json, doc),window:win=globalThis } = {}) {
+  const updateCost=mountTestCost(doc);
   const $ = id => doc.getElementById(id), text = (id, value) => { $(id).textContent = value; };
   const tiles = [0, 1].map(index => Array.from({ length: 200 }, () => {
     const tile = doc.createElement('span'); tile.className = 'comparison-cell'; tile.setAttribute('aria-hidden', 'true');
     $(`c-${index}-board`).append(tile); return tile;
   }));
-  let previousAnnouncement = '', previousLaneStates = [];
+  const visual=new Map(),presenters=[0,1].map(lane=>createPlacementPresenter({window:win,onFrame:observation=>{visual.set(lane,observation);render(comparison.view);},onSettled:()=>{visual.delete(lane);}}));
+  let previousAnnouncement = '', previousLaneStates = [], disposed=false;
   function render(view) {
-    SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked; });
+    if(disposed)return;
+    const costLane=view.lanes[1];if(costLane)updateCost({gameId:costLane.observation.sessionId,receipt:costLane.lastDecision?.receipt,error:!!costLane.error,busy:costLane.status==='choosing',replay:view.mode==='replay',openAI:$('c-right').value==='openai',tracked:costLane.policy?.kind==='externalDecisions'});
+    SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (view.config.right==='openai' && ['nodeCap','timeMs'].includes(key)); });
+    $('c-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     const ended = view.mode === 'live' && view.sample >= view.config.samples && view.lanes.every(l => l.outcome);
-    $('c-start').disabled = view.auto || view.busy || ended || !!view.archiveError;
-    $('c-step').disabled = view.auto || view.busy || ended || !!view.archiveError;
+    const selectingOpenAI=$('c-right').value==='openai',pendingOpenAI=view.mode!=='replay'&&!!pairing&&selectingOpenAI&&pairing.session.state.state!=='connected';
+    const paidBlocked=view.mode!=='replay'&&selectingOpenAI&&(pendingOpenAI||(pairing?.blocked&&!view.lanes[1].outcome));
+    $('c-start').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
+    $('c-step').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
     $('c-pause').disabled = !view.auto && !view.busy; $('c-stop').disabled = !view.locked;
     $('c-replay').disabled = !view.frameCount; $('c-export').disabled = !view.frameCount;
     text('c-start', view.mode === 'replay' ? 'Play saved frames' : view.locked ? 'Resume' : 'Start');
+    text('c-step',view.mode==='replay'?'Next frame':'Step');$('c-step').setAttribute('aria-label',view.mode==='replay'?'Next saved frame':'Step one piece in each eligible lane');
     const progress = view.mode === 'replay'
       ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new decisions or live metrics`
       : `${STATUS[view.state]} · Sample ${view.sample} of ${view.config.samples} · ${view.summary.observedPairs} completed pairs`;
     text('c-progress', progress + (view.config.pieceCap < 1000 ? ' · Abbreviated run' : ''));
-    view.lanes.forEach((lane, index) => {
+    view.lanes.forEach((canonical, index) => {
+      if(view.mode!=='replay')pairing?.observe(canonical.lastDecision?.receipt);
+      const p=canonical.error||canonical.recoveryRequired?null:canonical.presentation,lane=p?{...p.before,policy:canonical.policy,assistance:canonical.assistance,search:canonical.search,status:p.phase==='placing'?'placing':'choosing',observation:visual.get(index)??p.before.observation}:canonical;
       const prefix = `c-${index}-`, obs = lane.observation;
-      text(prefix + 'heading', `${index ? 'Right' : 'Left'} · ${lane.player.name}`);
-      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${lane.player.kind === 'mock' ? 'Offline test fixture' : 'Local algorithm'} · ${lane.assistance}`);
-      for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
+      text(prefix + 'heading',index===1&&pendingOpenAI?'OpenAI Decisions':compactPlayerName(lane.player.name));
+      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: index === 1 && $('c-right').value === 'openai' && pairing?.session.state.state !== 'connected' })} · ${lane.assistance}`);
+      if(index===1&&pendingOpenAI)text(prefix+'tier',pairing?.session.state.message??'Connect to request local owner approval.');
+      for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
         const falling = active.get(`${x},${y}`), type = falling ?? obs.board[y][x];
@@ -50,9 +67,9 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
         const label = doc.createElement('span'); label.textContent = type; item.append(mini, label); $(prefix + 'next').append(item);
       });
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
-      text(prefix + 'outcome', outcomeDetail(lane.recordedStatus ?? lane.status, obs, lane.error));
-      text(prefix + 'choice', lane.lastDecision ? `${lane.lastDecision.candidate.piece} · ${Math.round(lane.lastDecision.latencyMs)} ms local decision overhead${view.mode === 'replay' ? ' (recorded)' : ''}` : 'No piece selected yet.');
-      text(prefix + 'details', JSON.stringify({ placement: lane.lastDecision?.candidate ?? null, search: lane.search, policy: lane.policy,
+      text(prefix + 'outcome', visibleOutcome(lane.recordedStatus ?? lane.status, obs, lane.error));
+      text(prefix + 'choice', lane.lastDecision ? `${lane.lastDecision.candidate.piece} · ${Math.round(lane.lastDecision.latencyMs)} ms decision attempt latency${view.mode === 'replay' ? ' (recorded)' : ''}` : 'No piece selected yet.');
+      text(prefix + 'details', JSON.stringify({ receipt:lane.lastDecision?.receipt??null,placement: lane.lastDecision?.candidate ?? null, search: lane.search, policy: lane.policy,
         recordedStatus: lane.recordedStatus ?? null, valueMeaning: 'Raw board features; scalar leaf value is not a probability.' }, null, 2));
     });
     const s = view.summary;
@@ -68,18 +85,25 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     }
     if (view.archiveError) { $('c-error').hidden = false; text('c-error', view.archiveError); }
   }
-  const comparison = comparisonFactory({ onChange: render });
+  let pairing;
+  const comparison = comparisonFactory({ onChange: render,onPlacement:event=>presenters[event.lane].play(event),providerFactory:(key,config)=>key==='openai'?pairing.session.provider:providerFor(key,config) });
+  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',window:win,onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
   const settings = () => Object.fromEntries(SETTINGS.map(key => [key, ['left', 'right'].includes(key) ? $('c-' + key).value : Number($('c-' + key).value)]));
   const act = fn => async () => {
     try { $('c-error').hidden = true; text('c-error', ''); await fn(); }
-    catch (error) { $('c-error').hidden = false; text('c-error', error.message); }
+    catch (error) { $('c-error').hidden = false; text('c-error', error.message); render(comparison.view); }
   };
-  SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => comparison.configure(settings()))));
+  SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => {pairing?.setEnabled(settings().right==='openai');for(const field of ['nodeCap','timeMs'])$('c-'+field).disabled=settings().right==='openai';if(settings().right==='openai'&&pairing?.session.state.state!=='connected'){render(comparison.view);return;}comparison.configure(settings());})));
+  pairing?.setEnabled(false);
+  const disposeComparison=comparison.dispose.bind(comparison);
+  comparison.dispose=()=>{if(disposed)return;disposed=true;presenters.forEach(p=>p.dispose());disposeComparison();void pairing?.session.close().catch(()=>{});};
   for (const action of ['start', 'step']) $('c-' + action).addEventListener('click', act(async () => {
-    if (!comparison.view.locked) comparison.configure(settings()); await comparison[action]();
+    if (!comparison.view.locked) comparison.configure(settings()); await comparison[action](); await pairing?.refresh();
   }));
-  for (const action of ['pause', 'stop', 'reset', 'replay']) $('c-' + action).addEventListener('click', act(() => comparison[action]()));
+  for (const action of ['pause', 'stop', 'reset', 'replay']) $('c-' + action).addEventListener('click', act(async() => {comparison[action]();if(action==='reset'&&pairing?.session.state.admission?.mode==='project-limit-browser')await pairing.refresh();}));
   $('c-export').addEventListener('click', act(() => { onExport(comparison.exportRun()); text('c-announcement', 'Exported own saved visual frames. Private sequences omitted.'); }));
+  win.addEventListener?.('blur',()=>{if(comparison.view.auto||comparison.view.busy)comparison.pause();});
+  win.addEventListener?.('pagehide',event=>{if(event?.persisted){if(comparison.view.auto||comparison.view.busy)comparison.pause();}else comparison.dispose();});
   doc.addEventListener('visibilitychange', () => { if (doc.hidden && (comparison.view.auto || comparison.view.busy)) comparison.pause(); });
   const rules = briefing(), list = doc.createElement('ol');
   rules.instructions.forEach(instruction => { const li = doc.createElement('li'); li.textContent = instruction; list.append(li); });

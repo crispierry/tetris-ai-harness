@@ -83,13 +83,20 @@ const policyFor=(config,evaluator)=>freeze({version:LOOKAHEAD_VERSION,rulesVersi
   cacheKeyDefinition:'If enabled later: rules/observation/feature/evaluator/objective/search-policy versions and complete known board/active/preview',
   nodeUnit:'Placement nodes: supplied roots plus simulated child placements',reachabilityBounds:{poses:800,transitions:4000},
   horizon:'Current placement plus at most one known next placement; child preview at most original remaining three',live:false,modelCalls:0,spendCapUSD:0});
+// One search owns its cooperative queue and closes both ports on every outcome.
+function cooperativeScheduler(signal){
+ const channel=new MessageChannel();let pending=null,closed=false;
+ channel.port1.onmessage=()=>{const job=pending;pending=null;job?.resolve();};
+ const abort=()=>{const job=pending;pending=null;job?.reject(new SearchFailure('cancelled','cancelled'));};signal.addEventListener('abort',abort);
+ return {yield(){if(closed||signal.aborted)return Promise.reject(new SearchFailure('cancelled','cancelled'));return new Promise((resolve,reject)=>{pending={resolve,reject};channel.port2.postMessage(0);});},close(){closed=true;signal.removeEventListener('abort',abort);abort();channel.port1.onmessage=null;channel.port1.close();channel.port2.close();}};
+}
 async function search(packet,config,evaluator,policy,signal) {
   const parentSignal=signal,scope=new AbortController(),forwardAbort=()=>scope.abort();
   parentSignal?.addEventListener('abort',forwardAbort,{once:true});if(parentSignal?.aborted)scope.abort();signal=scope.signal;
   const started=performance.now(),stats={nodes:0,evaluatorCalls:0,rootsOffered:0,rootsCompleted:0,childrenEnumerated:0,leavesEvaluated:0,pruned:0,elapsedMs:0};
-  let deadline=config.timeMs,acceptedRequestId=null;
+  let deadline=config.timeMs,acceptedRequestId=null,lastYield=started;const scheduler=cooperativeScheduler(signal);
   const check=()=>{if(signal?.aborted)fail('cancelled','cancelled');if(performance.now()-started>=deadline)fail('timeout','time budget');};
-  const visit=async()=>{check();if(stats.nodes>=config.nodeCap)fail('budget','node budget');stats.nodes++;if(stats.nodes%16===0)await new Promise(r=>setTimeout(r,0));check();};
+  const visit=async()=>{check();if(stats.nodes>=config.nodeCap)fail('budget','node budget');stats.nodes++;if(performance.now()-lastYield>=8){await scheduler.yield();lastYield=performance.now();}check();};
   const evaluate=async leaf=>{
     check();if(stats.evaluatorCalls>=config.callCap)fail('budget','evaluator call budget');if(size(leaf)>config.maxOutputBytes)fail('budget','output budget');stats.evaluatorCalls++;
     let timer,listener,value;
@@ -138,7 +145,7 @@ async function search(packet,config,evaluator,policy,signal) {
     // Failed output is bounded too; invalid identities and complete evaluator policies are never echoed.
     if(size(report)>config.maxOutputBytes)report={...core,requestId:null,stats:{nodes:stats.nodes,evaluatorCalls:stats.evaluatorCalls,elapsedMs:stats.elapsedMs}};
     return freeze(report);
-  }finally{parentSignal?.removeEventListener('abort',forwardAbort);scope.abort();}
+  }finally{scheduler.close();parentSignal?.removeEventListener('abort',forwardAbort);scope.abort();}
 }
 export async function evaluateLookahead(packet,{evaluator=localLeafEvaluator(),signal,...options}={}) {
   const config=configuration(options),identity=evaluatorIdentity(evaluator);return search(packet,config,evaluator,policyFor(config,identity),signal);

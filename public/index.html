@@ -1,67 +1,110 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>Tetris · Local arcade</title>
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/modes.css">
-  <script type="module" src="/app.mjs"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Solo play · Tetris</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/arcade.css">
+<script type="module" src="/arcade-layout.mjs"></script>
+<script type="module" src="/app.mjs">
+</script>
 </head>
 <body>
-  <div class="shell">
-    <header class="page-header">
-      <div><p class="eyebrow" data-copy="eyebrow"></p><h1 data-copy="title"></h1></div>
-      <p class="intro" data-copy="intro"></p>
-    </header>
-    <nav class="mode-nav" aria-label="Play modes"><a href="/" aria-current="page">Solo play</a><a href="/harness.html">Solo computer</a><a href="/comparison.html">Algorithm comparison</a><a href="/versus.html">Human vs algorithm</a></nav>
-    <main class="game-layout" aria-labelledby="game-heading">
-      <section class="play-card" aria-labelledby="game-heading">
-        <div class="board-header">
-          <h2 id="game-heading" data-copy="playfield"></h2>
-          <span id="status" class="status" data-testid="status">Loading…</span>
-        </div>
-        <div id="game" class="game-surface" tabindex="0" role="region" aria-label="Tetris game"
-          aria-describedby="board-description focus-help controls-description">
-          <div id="board" class="board" role="img" aria-label="Game board"></div>
-          <div id="board-overlay" class="board-overlay" aria-hidden="true">
-            <span id="overlay-title"></span><span id="overlay-detail"></span>
-          </div>
-        </div>
-        <p id="board-description" class="sr-only"></p>
-        <div class="actions">
-          <button id="start" class="button button-primary" type="button" data-copy="start"></button>
-          <button id="pause" class="button button-primary" type="button" hidden></button>
-          <button id="new-game" class="button button-secondary" type="button" data-copy="newGame" hidden></button>
-        </div>
-        <p id="focus-help" class="focus-help" data-copy="focusHelp"></p>
-      </section>
-      <section class="stats-card card" aria-label="Game progress">
-        <dl class="stats">
-          <div><dt data-copy="score"></dt><dd id="score" data-testid="score">0</dd></div>
-          <div><dt data-copy="lines"></dt><dd id="lines" data-testid="lines">0</dd></div>
-          <div><dt data-copy="level"></dt><dd id="level" data-testid="level">1</dd></div>
-        </dl>
-      </section>
-      <section class="next-card card" aria-labelledby="next-heading">
-        <div><h2 id="next-heading" data-copy="next"></h2><p id="next-description" class="muted"></p></div>
-        <div id="next-piece" class="next-piece" aria-hidden="true"></div>
-      </section>
-      <section class="help-card card" aria-labelledby="controls-heading">
-        <h2 id="controls-heading" data-copy="controls"></h2>
-        <dl id="controls-description" class="controls-list">
-          <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd data-copy="move"></dd></div>
-          <div><dt><kbd>↓</kbd></dt><dd data-copy="softDrop"></dd></div>
-          <div><dt><kbd>↑</kbd> <span data-copy="or"></span> <kbd>X</kbd></dt><dd data-copy="rotate"></dd></div>
-          <div><dt><kbd data-copy="space"></kbd></dt><dd data-copy="hardDrop"></dd></div>
-          <div><dt><kbd>P</kbd></dt><dd data-copy="pauseResume"></dd></div>
-        </dl>
-        <p class="help-note" data-copy="helpNote"></p>
-      </section>
-    </main>
-    <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-    <noscript>This game needs JavaScript enabled to play.</noscript>
-  </div>
+<div class="arcade-shell">
+<header class="arcade-header">
+<h1>Tetris</h1>
+<span>300 lines</span>
+</header>
+<nav class="mode-nav" aria-label="Play modes">
+<a href="/" aria-current="page">Solo play</a>
+<a href="/harness.html">Solo computer</a>
+<a href="/comparison.html">Compare</a>
+<a href="/versus.html">Human vs computer</a>
+</nav>
+<main class="arcade-stage" aria-labelledby="game-heading">
+<section class="lane manual-lane">
+<div class="lane-heading">
+<h2 id="game-heading">You</h2>
+<span id="status" class="status" data-testid="status">Ready</span>
+</div>
+<div id="game" class="game-surface" tabindex="0" role="region" aria-label="Tetris game" aria-describedby="board-description focus-help controls-description">
+<div id="board" class="board" role="img" aria-label="Empty Tetris board">
+</div>
+<div id="board-overlay" class="board-overlay" aria-hidden="true">
+<span id="overlay-title">
+</span>
+<span id="overlay-detail">
+</span>
+</div>
+</div>
+<p id="board-description" class="sr-only">
+</p>
+<dl class="lane-metrics">
+<div>
+<dt>Score</dt>
+<dd id="score">0</dd>
+</div>
+<div>
+<dt>Lines</dt>
+<dd id="lines">0 / 300</dd>
+</div>
+<div>
+<dt>Level</dt>
+<dd id="level">1 / 30</dd>
+</div>
+</dl>
+</section>
+<section class="solo-utility">
+<h2 id="next-heading" data-copy="next">Next</h2>
+<div id="next-piece" class="next-piece" aria-hidden="true">
+</div>
+<p id="next-description" class="muted">
+</p>
+<p class="keyboard-hint">← → move · ↑ rotate<br>Space drop · P pause</p>
+</section>
+<aside class="control-rail" aria-label="Play controls">
+<div class="play-toolbar">
+<div class="primary-actions">
+<button id="start" class="button button-primary" data-copy="start">Start game</button>
+<button id="pause" class="button button-secondary" hidden>
+</button>
+<button id="new-game" class="button button-secondary" data-copy="newGame" hidden>
+</button>
+</div>
+</div>
+<p id="focus-help" class="note">Leaving the board pauses play.</p>
+<details>
+<summary>How to play</summary>
+<dl id="controls-description" class="controls-list">
+<div>
+<dt>← →</dt>
+<dd>Move</dd>
+</div>
+<div>
+<dt>↓</dt>
+<dd>Soft drop</dd>
+</div>
+<div>
+<dt>↑ or X</dt>
+<dd>Rotate</dd>
+</div>
+<div>
+<dt>Space</dt>
+<dd>Hard drop</dd>
+</div>
+<div>
+<dt>P</dt>
+<dd>Pause / resume</dd>
+</div>
+</dl>
+<p class="note">Clear 300 lines. Every 10 lines raises the level, up to 30. Keyboard required.</p>
+</details>
+</aside>
+</main>
+<p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+</p>
+</div>
 </body>
 </html>

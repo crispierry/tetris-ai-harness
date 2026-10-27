@@ -3,7 +3,7 @@ import {
   tick, togglePause, cells,
 } from './engine.mjs';
 
-import { MARATHON_COPY, linesProgress, outcomeDetail, formatNumber } from './marathon.mjs';
+import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail, formatNumber } from './marathon.mjs';
 
 // Player-facing copy stays together; HTML supplies the document structure.
 const COPY = {
@@ -12,7 +12,7 @@ const COPY = {
   newGame: 'New game', score: 'Score', lines: 'Lines', level: 'Level', next: 'Up next',
   controls: 'Keyboard controls', move: 'Move', softDrop: 'Soft drop', rotate: 'Rotate clockwise',
   hardDrop: 'Hard drop', pauseResume: 'Pause / resume', or: 'or', space: 'Space',
-  focusHelp: 'Click the board to focus. Leaving the game pauses play.',
+  focusHelp: 'Leaving the board pauses play.',
   helpNote: 'Desktop keyboard play. Clear full rows to reach the 300-line target.',
   status: { ready: 'Ready', playing: 'Playing', paused: 'Paused', over: 'Game over', won: MARATHON_COPY.complete },
   overlay: {
@@ -23,7 +23,7 @@ const COPY = {
   },
   piece: type => `${type} piece`,
   board: (state, count) => `20 rows by 10 columns. ${count} locked cells. ${state.active ? `Falling ${state.active.type} piece, row ${state.active.y + 1}, column ${state.active.x + 1}.` : 'No falling piece.'}`,
-  progress: state => `Score ${formatNumber(state.score)}. Lines ${formatNumber(state.lines)}. Level ${formatNumber(state.level)}.`,
+  progress: state => `Score ${formatNumber(state.score)}. Lines ${formatNumber(state.lines)}. Level ${levelProgress(state.level)}.`,
   lineClear: count => `${formatNumber(count)} ${count === 1 ? 'line' : 'lines'} cleared.`,
 };
 
@@ -102,7 +102,7 @@ function render(previous) {
   nextDescription.textContent = nextType ? COPY.piece(nextType) : '';
   score.textContent = formatNumber(state.score);
   lines.textContent = linesProgress(state.lines);
-  level.textContent = formatNumber(state.level);
+  level.textContent = levelProgress(state.level);
   status.textContent = COPY.status[state.status];
   status.dataset.state = state.status;
   surface.dataset.state = state.status;
