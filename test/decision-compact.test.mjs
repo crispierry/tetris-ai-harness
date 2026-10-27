@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createGame,start} from '../public/engine.mjs';
 import {observe,enumerate,candidateEvidence,execute} from '../public/harness.mjs';
 import {instructionPacket} from '../public/briefing.mjs';
-import {compactDecisionInput,strategicExamples,COMPACT_CHOICE_VERSION,LEGACY_CHOICE_VERSION} from '../decision-compact.mjs';
+import {compactDecisionInput,strategicExamples,COMPACT_CHOICE_VERSION,LEGACY_CHOICE_VERSION,HOLE_CHOICE_VERSION,holeConsequences,holeStrategicExamples} from '../decision-compact.mjs';
 import {requestFor,parse} from '../choice-protocol.mjs';
 import {stateFromObservation} from '../public/ai-gravity.mjs';
 const packetFor=(state,binding={sessionId:'compact-test',revision:1})=>instructionPacket(observe(state,binding),enumerate(state,binding).map(c=>candidateEvidence(state,c,binding)),{requestId:'compact-r',deadlineMs:1500,gravity:true});
@@ -51,4 +51,23 @@ test('winning compact moves retain the original five-piece preview and stop befo
  const initial=start(createGame(53)),board=initial.board.map(row=>[...row]);board[19]=Array.from({length:10},(_,x)=>x===5?null:'J');
  const packet=packetFor({...initial,board,active:{type:'I',rotation:1,x:3,y:0},lines:299,level:30}),input=compactDecisionInput(packet),winner=packet.candidates.findIndex(c=>c.afterstate.status==='won');
  assert(winner>=0);const move=input.moves[winner];assert.equal(move.after.active,null);assert.equal(move.after.previewRemaining,5);assert.equal(input.current.lines+move.change.lines,300);assert.deepEqual(input.current.next,packet.candidates[winner].afterstate.next);
+});
+test('hole facts expose compensated creation and track surviving holes through a row clear',()=>{
+ const empty=()=>Array.from({length:20},()=>Array(10).fill(null)),before=empty(),after=empty();before[18][0]='J';after[18][0]='J';after[19][0]='I';after[18][1]='J';
+ assert.deepEqual(holeConsequences(before,after,[]),{created:1,resolved:1,maxBlocksAboveHole:1});
+ const fallingBefore=empty(),fallingAfter=empty();fallingBefore[16][0]='J';fallingAfter[17][0]='J';assert.deepEqual(holeConsequences(fallingBefore,fallingAfter,[19]),{created:0,resolved:1,maxBlocksAboveHole:1});
+});
+test('hole guidance supplies facts for every option without changing order, selecting, ranking or scoring a current move',()=>{
+ const p=packetFor(start(createGame(197))),input=compactDecisionInput(p,{prioritizeHoles:true}),request=requestFor('decisions',p,{model:'gpt-6-luna'},{format:HOLE_CHOICE_VERSION});
+ assert.equal(input.format,HOLE_CHOICE_VERSION);assert.equal(input.moves.length,p.candidates.length);assert.deepEqual(input.moves.map(m=>m.move),p.candidates.map((_,i)=>`m${i}`));
+ for(let i=0;i<p.candidates.length;i++){const c=p.candidates[i],m=input.moves[i];assert.equal(m.holeEvidence.created-m.holeEvidence.resolved,c.featureDeltas.holes);assert.deepEqual(board(m.after.rows),c.afterstate.board);for(const key of ['recommended','rank','value','evaluationScore','prefer'])assert(!Object.hasOwn(m,key));}
+ assert(!Object.hasOwn(input,'prefer'));assert(!Object.hasOwn(input,'recommended'));assert.match(request.body.questions[0].instructions,/you decide exceptions/);assert.match(request.body.questions[0].choices[0].description,/new holes/);
+ const values=request.body.questions[0].choices.map(c=>c.value),chosen=values.at(-1),result={status:200,body:{model:'gpt-6-luna',answers:[{name:'placement',type:'choice',choice:chosen,confidence:1,probabilities:values.map(value=>({value,probability:value===chosen?1:0}))}]}};
+ assert.equal(parse('decisions',result,p,{format:HOLE_CHOICE_VERSION}).choice.selectedCandidateId,p.candidates.at(-1).id);
+});
+test('hole-priority examples teach a deliberate roughness tradeoff and resolving an existing hole',()=>{
+ const e=holeStrategicExamples(),good=x=>x.options.find(o=>o.move===x.prefer),bad=x=>x.options.find(o=>o.move!==x.prefer);
+ assert.equal(e.length,3);assert.equal(good(e[0]).holeEvidence.created,0);assert(bad(e[0]).holeEvidence.created>0);assert(good(e[0]).features.bumpiness>bad(e[0]).features.bumpiness);
+ assert.equal(good(e[1]).holeEvidence.resolved,1);assert.equal(good(e[1]).holeEvidence.created,0);assert.equal(bad(e[1]).holeEvidence.resolved,0);assert.equal(good(e[2]).after.status,'playing');assert.equal(bad(e[2]).after.status,'over');
+ for(const example of e){const initial=start(createGame(71)),state=stateFromObservation({...observe(initial,{sessionId:'hole-verify',revision:1}),board:example.current.rows,active:example.current.active,next:example.current.next}),binding={sessionId:'hole-verify',revision:1},cs=enumerate(state,binding).map(c=>candidateEvidence(state,c,binding));for(const option of example.options){const c=cs.find(c=>JSON.stringify(c.cells.map(p=>[p.x,p.y]))===JSON.stringify(option.cells));assert(c);assert.deepEqual(option.holeEvidence,holeConsequences(state.board,c.afterstate.board,c.clearedRows));}}
 });

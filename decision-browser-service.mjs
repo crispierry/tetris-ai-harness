@@ -7,14 +7,14 @@ import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {digest} from './decision-store.mjs';
 import {canonicalPacket} from './decision-service.mjs';
 import {requestFor,parse} from './choice-protocol.mjs';
-import {COMPACT_CHOICE_VERSION,LEGACY_CHOICE_VERSION} from './decision-compact.mjs';
+import {COMPACT_CHOICE_VERSION,HOLE_CHOICE_VERSION,LEGACY_CHOICE_VERSION} from './decision-compact.mjs';
 import {pilotUsage} from './decision-pilot-qualification.mjs';
 import {qualifiedDecisionBrowser,BROWSER_MODE,BROWSER_LIMITS,BROWSER_SPEND,BROWSER_QUALIFICATION_KIND} from './decision-browser-qualification.mjs';
 import {freeze} from './public/harness.mjs';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const same=(a,b)=>digest(a)===digest(b);
-export async function createDecisionBrowserService({store,policy,qualification,credential,fetchImpl=globalThis.fetch,selectionFormat=COMPACT_CHOICE_VERSION,reverseChoices=false}={}){
- if(![COMPACT_CHOICE_VERSION,LEGACY_CHOICE_VERSION].includes(selectionFormat)||typeof reverseChoices!=='boolean')fail('browser_configuration');
+export async function createDecisionBrowserService({store,policy,qualification,credential,fetchImpl=globalThis.fetch,selectionFormat=HOLE_CHOICE_VERSION,reverseChoices=false}={}){
+ if(![COMPACT_CHOICE_VERSION,HOLE_CHOICE_VERSION,LEGACY_CHOICE_VERSION].includes(selectionFormat)||typeof reverseChoices!=='boolean')fail('browser_configuration');
  const choiceOptions=Object.freeze({format:selectionFormat,reverseChoices});
  policy=freeze(structuredClone(policy));qualification=freeze(structuredClone(qualification));
  if(!store||store.fixtureOnly||store.recoveryOnly||!qualifiedDecisionBrowser(qualification,policy)||typeof credential!=='string'||createHash('sha256').update(credential,'utf8').digest('hex')!==qualification.projectEvidence.keyFingerprint||typeof fetchImpl!=='function'||store.snapshot().policyDigest!==digest(policy))fail('browser_configuration');
