@@ -82,9 +82,10 @@ export class GravityController{
    if(this.#pending!==job||job.finalizing||abort.signal.aborted)return null;
    job.latencyMs=this.#clock.now()-job.decisionStarted;if(job.latencyMs>=this.#deadline)throw new Error('Decision deadline exceeded');
    if(new TextEncoder().encode(JSON.stringify(response)).length>4096)throw new Error('Decision response exceeds size limit');
-   const id=validateChoice(packet,response);job.receipt=this.#provider.kind==='remote'?compactReceipt(this.#provider.lastReceipt):this.#provider.runMetadata?.search?localSearchReceipt(this.#provider.lastReceipt):null;this.#advance(job);if(this.#pending!==job||job.finalizing||abort.signal.aborted)return null;turn.choose(id);job.selected=id;this.#state=turn.state;
-   job.last={candidate:packet.candidates.find(c=>c.id===id),latencyMs:job.latencyMs,requestId:job.requestId,player:this.#provider.name,receipt:this.#provider.lastReceipt??null};
-   this.#last=freeze({...job.last,missedChoice:turn.missed});this.#status='falling';this.#emit();
+   const id=validateChoice(packet,response);job.receipt=this.#provider.kind==='remote'?compactReceipt(this.#provider.lastReceipt):this.#provider.runMetadata?.search?localSearchReceipt(this.#provider.lastReceipt):null;this.#advance(job);if(this.#pending!==job||job.finalizing||abort.signal.aborted)return null;const beforePieces=this.#pieces+turn.locks;turn.choose(id);job.selected=id;this.#state=turn.state;
+   const applied=turn.placement,placement=applied?freeze({beforeObservation:observe(applied.before,binding),beforePieces,candidate:candidateEvidence(applied.before,applied.candidate,binding)}):null;
+   job.last={placement,candidate:packet.candidates.find(c=>c.id===id),latencyMs:job.latencyMs,requestId:job.requestId,player:this.#provider.name,receipt:this.#provider.lastReceipt??null};
+   this.#last=freeze({...job.last,missedChoice:turn.missed});this.#status=turn.locked?'placing':'falling';this.#emit();
    this.#clock.clearTimeout(timer);abort.signal.removeEventListener('abort',abortListener);abortListener=null;
    if(!turn.locked)await locked;
    if(this.#pending!==job||job.finalizing)return null;

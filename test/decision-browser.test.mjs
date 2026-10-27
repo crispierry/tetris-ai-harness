@@ -269,17 +269,14 @@ test('actual selectors independently pair both OpenAI lanes and keep lookahead s
 });
 
 
-test('real-gravity browser choice settles its actual fall through HTTP, supports paused poses and preserves $1 accounting',async t=>{
- let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})}),clock=fakeClock();let journal;
+test('real-gravity browser choice falls while thinking, then settles its Space drop with unchanged $1 accounting',async t=>{
+ let calls=0,release,entered;const gate=new Promise(r=>entered=r),f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++,hold:async()=>{if(calls===1){entered();await new Promise(r=>release=r);}}})}),clock=fakeClock();let journal;
  const c=new GravityController({sessionId:'browser',provider:f.bridge,clock,onTransition:({input,view})=>journal.append(0,input,view)});
  journal=new DecisionJournal({mode:'solo'});journal.addLane(0,'computer',c.view,gravityPolicy(providerPolicy(f.bridge)));
- const first=c.step();await settle(()=>c.view.status==='falling');assert.equal(calls,1);assert.equal(c.view.pieces,0);assert.equal(f.bridge.lastReceipt.placements,0);
- await clock.advance(850);assert.equal(c.view.observation.active.y,1);c.pause();await first;
- assert.equal(c.view.status,'paused');assert.equal(c.view.pieces,0);assert.equal(clock.size,0);let status=await f.bridge.status();assert.equal(status.ownerHold,false);assert.equal(status.placements,0);assert.deepEqual(status.spendControl,{configuredProjectLimitUSD:1,enforcementDelayOvershoot:'unquantified',riskAccepted:true});
- assert.equal(verifyDecisionUIRecord(journal.exportRun({metadata:{accounting:status}})).ok,true);
- const second=c.step();await settle(()=>c.view.status==='falling');await clock.advance(16000);await second;assert.equal(c.view.pieces,1);assert.equal(calls,2);
- status=await f.bridge.status();assert.equal(status.placements,1);assert.equal(status.attempts,2);assert.equal(status.ownerHold,false);const json=journal.exportRun({metadata:{accounting:status}});assert.equal(verifyDecisionUIRecord(json).ok,true);
- const record=JSON.parse(json),settled=record.events.find(e=>e.input.kind==='gravity');await assert.rejects(f.service.control(f.grant.capability,'settleGravity',undefined,{requestId:settled.input.requestId,proof:settled.input.proof,observation:settled.observation}));assert.equal((await f.bridge.status()).placements,1);record.events.find(e=>e.input.kind==='gravity').input.proof.trace[0].choiceId='invented';assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(record)));
+ const first=c.step();await gate;await clock.advance(850);assert.equal(calls,1);assert.equal(c.view.pieces,0);assert.equal(c.view.observation.active.y,1);release();await first;assert.equal(c.view.pieces,1);assert.equal(c.view.status,'paused');assert.equal(clock.size,0);assert.equal(f.bridge.lastReceipt.placements,0);
+ let status=await f.bridge.status();assert.equal(status.ownerHold,false);assert.equal(status.placements,1);assert.deepEqual(status.spendControl,{configuredProjectLimitUSD:1,enforcementDelayOvershoot:'unquantified',riskAccepted:true});assert.equal(verifyDecisionUIRecord(journal.exportRun({metadata:{accounting:status}})).ok,true);
+ await c.step();assert.equal(c.view.pieces,2);assert.equal(calls,2);status=await f.bridge.status();assert.equal(status.placements,2);assert.equal(status.attempts,2);assert.equal(status.ownerHold,false);const json=journal.exportRun({metadata:{accounting:status}});assert.equal(verifyDecisionUIRecord(json).ok,true);
+ const record=JSON.parse(json),settled=record.events.find(e=>e.input.kind==='gravity');await assert.rejects(f.service.control(f.grant.capability,'settleGravity',undefined,{requestId:settled.input.requestId,proof:settled.input.proof,observation:settled.observation}));assert.equal((await f.bridge.status()).placements,2);settled.input.proof.version='ai-gravity-turn-1';assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(record)),/timing/);
  for(const secret of [dummy,fingerprint,'proj_dummy_browser'])assert(!json.includes(secret));
 });
 
@@ -294,7 +291,7 @@ test('both gravity-enabled OpenAI boards fall while choices alone share the one-
  let calls=0,release,entered;const gate=new Promise(r=>entered=r),f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++,hold:async()=>{if(calls===1){entered();await new Promise(r=>release=r);}}})}),clock=fakeClock();
  const run=await f.service.owner.issueRun({laneId:'second',controllerSessionBase:'second'}),second=createDecisionBridge({grant:{...run,admission:await f.service.control(run.capability,'runStatus')},fetchImpl:f.fetchHTTP});
  const c=new Comparison({clock,config:{gravity:true,left:'openai',right:'openai',pieceCap:1},providerFactory:(key,settings,{lane})=>lane?second:f.bridge});
- try{const step=c.step();await gate;await clock.advance(800);assert(c.view.lanes.every(l=>l.observation.active.y===1));assert.equal(calls,1);release();await settle(()=>calls===2&&c.view.lanes.every(l=>l.status==='falling'));assert.equal(f.service.status().available,true);await clock.advance(16000);await step;
+ try{const step=c.step();await gate;await clock.advance(800);assert(c.view.lanes.every(l=>l.observation.active.y===1));assert.equal(calls,1);release();await step;assert.equal(f.service.status().available,true);
   assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(c.view.state,'completed');assert.equal(calls,2);assert.equal(clock.size,0);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);assert.equal(f.store.snapshot().browserSession.ownerHold,false);
  }finally{release?.();c.dispose();await second.close();}
 });
@@ -303,5 +300,5 @@ test('lost gravity acknowledgement retains the real board and one request with a
  const f=await fixture(t,{httpServer:true}),clock=fakeClock();let acks=0,journal;
  const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,o)=>{const body=JSON.parse(o.body),response=await f.fetchHTTP(route,o);if(body.action==='settleGravity'){acks++;throw new Error('dummy lost gravity acknowledgement');}return response;}});
  const c=new GravityController({sessionId:'browser',provider:bridge,clock,onTransition:({input,view})=>journal.append(0,input,view)});journal=new DecisionJournal({mode:'solo'});journal.addLane(0,'computer',c.view,gravityPolicy(providerPolicy(bridge)));
- const step=c.step();await settle(()=>c.view.status==='falling');await clock.advance(16000);await step;assert.equal(c.view.pieces,1);assert.equal(c.view.status,'error');assert.equal(c.view.recoveryRequired,true);assert.equal(acks,1);assert.equal(f.store.snapshot().used.attempts,1);assert.equal(f.store.snapshot().browserSession.ownerHold,true);assert.equal(clock.size,0);assert.equal(verifyDecisionUIRecord(journal.exportRun()).ok,true);await bridge.close();
+ const step=c.step();await step;assert.equal(c.view.pieces,1);assert.equal(c.view.status,'error');assert.equal(c.view.recoveryRequired,true);assert.equal(acks,1);assert.equal(f.store.snapshot().used.attempts,1);assert.equal(f.store.snapshot().browserSession.ownerHold,true);assert.equal(clock.size,0);assert.equal(verifyDecisionUIRecord(journal.exportRun()).ok,true);await bridge.close();
 });

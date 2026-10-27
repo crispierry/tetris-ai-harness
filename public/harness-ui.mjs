@@ -2,7 +2,7 @@ import {GravityController} from './gravity-controller.mjs';
 import {gravityPolicy} from './ai-gravity.mjs';
 import {mountTestCost} from './test-cost.mjs';
 import {compactPlayerName,visibleOutcome} from './arcade-copy.mjs';
-import {createPlacementPresenter,placementEvent,depth2Error} from './placement-motion.mjs';
+import {createPlacementPresenter,placementEvent,placementBeforeView,depth2Error} from './placement-motion.mjs';
 import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
 import { providerPolicy } from './provider-policy.mjs';
@@ -37,8 +37,8 @@ function render(view) {
  $('h-reset').disabled=!replay&&!!pairing?.resetBlocked;
  if(replay&&replayFrame)view=replayFrame;
  if(!replay)pairing?.observe(view.lastDecision?.receipt);
- if(pendingPresentation&&view.busy&&!beforeView&&!view.lastDecision)beforeView=view;
- if(beforeView&&(pendingPresentation||placing)&&!view.error)view={...beforeView,status:placing?'placing':'choosing',busy:true,observation:visual??beforeView.observation};
+ if(pendingPresentation&&view.busy&&!beforeView&&(gravity()||!view.lastDecision))beforeView=gravity()?placementBeforeView(view):view;
+ if(beforeView&&(pendingPresentation||placing)&&!view.error)view={...beforeView,status:placing||beforeView.status==='placing'?'placing':'choosing',busy:true,observation:visual??beforeView.observation};
  else if(replay&&visual)view={...view,observation:visual,status:'placing'};
  const obs=view.observation, active=new Map((obs.active?.cells??[]).map(p=>[`${p.x},${p.y}`,obs.active.type]));
  for(let y=0;y<RULES.height;y++)for(let x=0;x<RULES.width;x++){
@@ -72,7 +72,7 @@ newJournal();
 pairing=mountDecisionPairing(doc,{mode:'solo',lane:'solo',window:win,onAvailabilityChange:()=>render(controller.view),beforeConnect:()=>{if($('h-provider').value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if($('h-provider').value==='openai')chooseProvider();}});
 function chooseProvider(){if(locked)return;controller.stop();provider=$('h-provider').value==='openai'?pairing.session.provider:$('h-provider').value==='lookahead'?providerFor('lookahead',{depth:Number(depthSelect.value)}):$('h-provider').value==='local'?heuristic():mockProvider({mode:$('h-provider').value});controller=new (gravity()?GravityController:Controller)({...(provider.kind==='remote'?pairing.session.binding:{sessionId:'harness'}),provider,...(clock?{clock}:{}),onChange:render,onTransition:transition});policy=currentPolicy();newJournal();frames=[];render(controller.view);}
 function record(){const v=controller.view;if(v.lastDecision?.requestId && v.lastDecision.requestId===frames.at(-1)?.lastDecision?.requestId)return;if(!v.lastDecision&&frames.at(-1)?.status===v.status)return;const last=v.lastDecision;const frame=JSON.parse(JSON.stringify({...v,lastDecision:last?{requestId:last.requestId,latencyMs:last.latencyMs,receipt:last.receipt,candidate:{piece:last.candidate.piece,cells:last.candidate.cells,orientation:last.candidate.orientation,path:last.candidate.path.map(a=>({left:'L',right:'R',clockwise:'C',down:'D',drop:'H'})[a]).join(''),pathEncoding:'LRCDH-1',clearedRows:last.candidate.clearedRows,scoreDelta:last.candidate.scoreDelta,features:last.candidate.features}}:null}));const bytes=new TextEncoder().encode(JSON.stringify(frame)).length;if(frames.length>=1000||recordingBytes+bytes>16*1024*1024-160*1024){journal.censor();archiveError='Recording limit reached. The 300-line goal was not reached. Reset to play again.';auto=false;controller.stop();$('h-outcome').textContent=archiveError;return;}recordingBytes+=bytes;frames.push(freeze(frame));}
-async function one(continuing=false){locked=true;const token=generation,sessionId=controller.view.observation.sessionId,previousPieces=controller.view.pieces;pendingPresentation=!gravity();beforeView=null;await controller.step({continueRunning:continuing});if(token!==generation){if(!replay&&controller.view.observation.sessionId===sessionId)record();return;}record();const v=controller.view;pendingPresentation=false;
+async function one(continuing=false){locked=true;const token=generation,sessionId=controller.view.observation.sessionId,previousPieces=controller.view.pieces;pendingPresentation=true;beforeView=null;await controller.step({continueRunning:continuing});if(token!==generation){if(!replay&&controller.view.observation.sessionId===sessionId)record();return;}record();const v=controller.view;pendingPresentation=false;
  if(beforeView&&v.pieces===previousPieces+1&&!v.error&&!v.recoveryRequired){placing=true;motionAbort=new AbortController();render(v);await presenter.play(placementEvent(beforeView,v,{generation:token,signal:motionAbort.signal}));if(token!==generation)return;}
  placing=false;beforeView=null;motionAbort=null;render(controller.view);if(journal.incomplete){archiveError=journal.archiveError;auto=false;controller.stop();}await pairing?.refresh();if(controller.view.pieces>=1000||controller.view.recoveryRequired){auto=false;render(controller.view);}}
 

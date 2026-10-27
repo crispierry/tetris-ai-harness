@@ -1,6 +1,6 @@
 import {GravityController} from './gravity-controller.mjs';
 import {gravityPolicy} from './ai-gravity.mjs';
-import {placementEvent,depth2Error} from './placement-motion.mjs';
+import {placementEvent,placementBeforeView,depth2Error} from './placement-motion.mjs';
 import { providerPolicy, compactReceipt, localSearchReceipt } from './provider-policy.mjs';
 import { DecisionJournal, DECISION_RECORD_LIMITS } from './decision-record.mjs';
 import { Controller, heuristic, mockProvider, HEURISTIC_WEIGHTS } from './controller.mjs';
@@ -110,7 +110,7 @@ export class Comparison {
       const key = this.#config[side], provider = providers[index];
       const lane = { key, provider, outcome: null, controller: null, presentation:null,capturing:false,before:null,policy:this.#config.gravity?gravityPolicy(providerPolicy(provider)):canonical?providerPolicy(provider):lanePolicy(provider, key) };
       lane.controller = new (this.#config.gravity?GravityController:Controller)({ seed: this.#seeds[this.#sample], sessionId: provider.controllerBinding?.sessionId ?? `compare-${this.#id}-${this.#epoch}-${index}`, gameEpoch:provider.kind==='remote'?this.#gameEpoch:0,
-        provider,pieceCap:this.#config.pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(index,input,view);}, onChange:view => {if(lane.capturing&&view.busy&&!lane.before){lane.before=view;lane.presentation={phase:'choosing',before:view};} if(this.#lanes.includes(lane))this.#emit();} });
+        provider,pieceCap:this.#config.pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(index,input,view);}, onChange:view => {if(lane.capturing&&view.busy&&!lane.before){const before=this.#config.gravity?placementBeforeView(view):view;if(before){lane.before=before;lane.presentation={phase:before.status==='placing'?'placing':'choosing',before};}} if(this.#lanes.includes(lane))this.#emit();} });
       return lane;
     });
     // Finished samples consume the same recording allowance as the active one.
@@ -190,7 +190,7 @@ export class Comparison {
   async #place(index, epoch) {
     const lane = this.#lanes[index];
     if (epoch !== this.#epoch || lane.outcome || lane.controller.view.busy) return;
-    lane.capturing=!!this.#onPlacement&&!this.#config.gravity;lane.before=null;
+    lane.capturing=!!this.#onPlacement;lane.before=null;
     const previousPieces=lane.controller.view.pieces,started = performance.now();
     await lane.controller.step({ continueRunning: this.#auto,admitDecision:this.#config.gravity&&lane.provider.kind==='remote'?signal=>this.#admit(lane,signal):null });
     if (epoch === this.#epoch) this.#decisionElapsedMs += performance.now() - started;

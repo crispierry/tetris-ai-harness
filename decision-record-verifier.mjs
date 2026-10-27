@@ -1,4 +1,4 @@
-import {GRAVITY_TIMING,replayGravityProof,stateFromObservation} from './public/ai-gravity.mjs';
+import {GRAVITY_TIMING,isGravityTiming,gravityProofVersion,replayGravityProof,stateFromObservation} from './public/ai-gravity.mjs';
 import {validBrowserPolicy,validBrowserReceipt,validBrowserAccounting} from './public/browser-risk-contract.mjs';
 /** Node-only canonical record verifier. Dependency boundary: pure reducers only. */
 import {RULES,cells,start,move,rotate,softDrop,hardDrop,tick,togglePause,levelForLines} from './public/engine.mjs';
@@ -34,7 +34,7 @@ function finiteJSON(o,depth=0){if(depth>8)fail('metadata depth');if(o===null||ty
 function limits(p){allow(p,LIMIT_FIELDS,'policy limits');for(const v of Object.values(p))integer(v,1,Number.MAX_SAFE_INTEGER,'policy limit');}
 function heuristicPolicy(p){keys(p,['weights','terminalPenalty','completionReward','terminalOrder','tieBreak'],'heuristic policy');keys(p.weights,['holes','aggregateHeight','maxHeight','bumpiness','lines'],'heuristic weights');for(const v of [...Object.values(p.weights),p.terminalPenalty,p.completionReward])if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>1e9)fail('heuristic numeric policy');if(typeof p.terminalOrder!=='string'||typeof p.tieBreak!=='string')fail('heuristic policy text');finiteJSON(p);}
 function policy(p){
- if(p?.kind!=='human'&&Object.hasOwn(p??{},'timing')){if(p.timing!==GRAVITY_TIMING)fail('gravity timing policy');const {timing,...base}=p;policy(base);return;}
+ if(p?.kind!=='human'&&Object.hasOwn(p??{},'timing')){if(!isGravityTiming(p.timing))fail('gravity timing policy');const {timing,...base}=p;policy(base);return;}
  finiteJSON(p);if(size(p)>16384)fail('policy bytes');
  if(p?.version==='provider-policy-browser-1'){if(!validBrowserPolicy(p))fail('browser policy contract');}
  else if(p?.version==='provider-policy-pilot-1'){
@@ -137,8 +137,9 @@ export function verifyDecisionUIRecord(input){
   const human=l.kind==='human';
   if(i.kind==='gravity'){
    keys(i,['kind','requestId','revision','selectedCandidateId','receipt','latencyMs','proof','outcome','recoveryRequired'],'gravity input');
-   if(human||l.policy.timing!==GRAVITY_TIMING||s.status!=='playing'||l.recovery)fail('gravity state');request(l,i,before);
+   if(human||!isGravityTiming(l.policy.timing)||s.status!=='playing'||l.recovery)fail('gravity state');request(l,i,before);
    if(!Number.isFinite(i.latencyMs)||i.latencyMs<0||i.latencyMs>60000||!['placed','paused','stopped','cancel','error'].includes(i.outcome)||typeof i.recoveryRequired!=='boolean'||(i.recoveryRequired&&l.policy.kind!=='externalDecisions'))fail('gravity disposition');
+   if(i.proof?.version!==gravityProofVersion(l.policy.timing))fail('gravity proof timing');
    const turn=replayGravityProof(s,{sessionId:before.sessionId,revision:rev},i.proof,{selectedCandidateId:i.selectedCandidateId});
    if(i.selectedCandidateId!==null){receipt(i.receipt,i,l.policy,turn.offered.length);if(l.policy.version==='provider-policy-browser-1'&&i.receipt.version!=='decision-browser-gravity-receipt-1')fail('gravity receipt timing');}
    else if(i.receipt!==null||!['cancel','error'].includes(i.outcome))fail('gravity missing choice');
@@ -147,7 +148,7 @@ export function verifyDecisionUIRecord(input){
    l.recovery=i.recoveryRequired;status=['won','over'].includes(s.status)?s.status:l.recovery?'error':i.outcome==='placed'?e.status:i.outcome==='cancel'?e.status:i.outcome;
    if(!['won','over','running','paused','stopped','error'].includes(status))fail('gravity status');l.attempt=i.outcome==='error'?'error':i.outcome==='cancel'?'cancel':'computer';
   }else if(i.kind==='computer'){
-   if(l.policy.timing===GRAVITY_TIMING)fail('gravity requires real clock evidence');
+   if(isGravityTiming(l.policy.timing))fail('gravity requires real clock evidence');
    keys(i,['kind','requestId','revision','selectedCandidateId','piece','orientation','cells','path','receipt','latencyMs'],'computer input');if(human||s.status!=='playing'||l.recovery)fail('computer state');
    request(l,i,before);if(!Number.isFinite(i.latencyMs)||i.latencyMs<0||i.latencyMs>60000)fail('decision latency');points(i.cells,'selected cells');integer(i.orientation,0,3,'selected orientation');if(!RULES.types.includes(i.piece)||!Array.isArray(i.path)||i.path.length<1||i.path.length>800||i.path.some(a=>!['left','right','clockwise','down','drop'].includes(a)))fail('selected route');
    const binding={sessionId:before.sessionId,revision:rev},offered=enumerate(s,binding);receipt(i.receipt,i,l.policy,offered.length);if(i.receipt?.version==='decision-browser-gravity-receipt-1')fail('paused receipt timing');const c=offered.find(c=>c.id===i.selectedCandidateId);

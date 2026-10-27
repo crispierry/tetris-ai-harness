@@ -1,6 +1,6 @@
 import {GravityController} from './gravity-controller.mjs';
 import {gravityPolicy} from './ai-gravity.mjs';
-import {placementEvent,depth2Error} from './placement-motion.mjs';
+import {placementEvent,placementBeforeView,depth2Error} from './placement-motion.mjs';
 import { providerPolicy, compactReceipt, localSearchReceipt } from './provider-policy.mjs';
 import { DecisionJournal } from './decision-record.mjs';
 import { createGame, start, move, rotate, softDrop, hardDrop, tick, togglePause, DEFAULT_SEED, RULES } from './engine.mjs';
@@ -56,7 +56,7 @@ export class HumanVersus {
     this.#humanOutcome = null; this.#aiOutcome = null; this.#provider = this.#factory();this.#externalPolicy=this.#provider.kind==='remote'?providerPolicy(this.#provider):null;
     if (!['local', 'mock', 'remote'].includes(this.#provider?.kind)) throw new Error('Only local or test-mock algorithms are supported.');
     const controller = new (this.#gravity?GravityController:Controller)({ seed: DEFAULT_SEED, sessionId: this.#provider.controllerBinding?.sessionId ?? `versus-${this.#id}-${this.#epoch}`,gameEpoch:this.#provider.kind==='remote'?this.#session:0,
-      provider: this.#provider,pieceCap:this.#pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: VERSUS_LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(1,input,view);}, onChange:view=>{if(this.#capture&&view.busy&&!this.#before){this.#before=view;this.#presentation={phase:'choosing',before:view};}if(this.#ai===controller)this.#emit();} });
+      provider: this.#provider,pieceCap:this.#pieceCap,...(this.#clock?{clock:this.#clock}:{}), deadlineMs: VERSUS_LIMITS.deadlineMs, onTransition:({input,view})=>{if(this.#journal&&(!this.#journal.incomplete||['computer','spawn'].includes(input.kind))&&this.#mode==='live')this.#journal.append(1,input,view);}, onChange:view=>{if(this.#capture&&view.busy&&!this.#before){const before=this.#gravity?placementBeforeView(view):view;if(before){this.#before=before;this.#presentation={phase:before.status==='placing'?'placing':'choosing',before};}}if(this.#ai===controller)this.#emit();} });
     this.#ai = controller;
     this.#journal=(this.#provider.kind==='remote'||this.#gravity)?new DecisionJournal({mode:'versus',pieceCap:this.#pieceCap}):null;this.#savedExport=null;
     this.#journal?.addLane(0,'human',this.#humanView(),this.#policies()[0]);
@@ -184,7 +184,7 @@ export class HumanVersus {
   async #oneAI(epoch) {
     if (epoch !== this.#epoch || this.#aiOutcome || (this.#ai.view.busy||this.#motion) || !this.#capacity()) return;
     const controller = this.#ai;
-    this.#capture=!!this.#onPlacement&&!this.#gravity;this.#before=null;const previousPieces=controller.view.pieces;
+    this.#capture=!!this.#onPlacement;this.#before=null;const previousPieces=controller.view.pieces;
     const started = performance.now();
     await controller.step({ continueRunning: this.#state === 'running' });
     if (epoch === this.#epoch) this.#algorithmElapsedMs += performance.now() - started;
