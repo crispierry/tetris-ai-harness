@@ -64,3 +64,5 @@
  .mobile-control-slot #start,.mobile-control-slot #new-game{grid-column:span 2}
  .mobile-control-slot .button-quiet{min-inline-size:0}
 }
+
+.provider-connections .decision-pairing>h3{display:block;color:var(--muted);margin-block-start:12px}

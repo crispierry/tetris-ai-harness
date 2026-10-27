@@ -24,7 +24,7 @@ test('source Connect → owned HTTP → exact owner → once claim → Controlle
  try {
   assert.equal(Object.keys(store.snapshot().runs).length,0);assert.equal(calls,0);
   const nonce=randomBytes(32).toString('hex'),nonceDigest=createHash('sha256').update(Buffer.from(nonce,'hex')).digest('hex');
-  await assert.rejects(owner.register({nonceDigest,mode:'comparison',lane:'left'}));
+  await assert.rejects(owner.register({nonceDigest,mode:'comparison',lane:'invalid'}));
   assert.equal((await fetchImpl('/decision/pair/register',{method:'POST',headers:{origin:'http://evil','content-type':'application/json'},body:JSON.stringify({nonceDigest,mode:'solo',lane:'solo'})})).status,403);
   const c=await owner.register({nonceDigest,mode:'solo',lane:'solo'});assert.equal(calls,0);assert.equal(Object.keys(store.snapshot().runs).length,0);
   await assert.rejects(owner.claim({challengeId:c.challengeId},'0'.repeat(64)));await assert.rejects(owner.command({action:'approve',challengeId:c.challengeId,nonceDigest,mode:'solo',lane:'right'}));

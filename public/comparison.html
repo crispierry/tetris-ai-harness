@@ -102,6 +102,7 @@
 <option value="look2">Lookahead depth 2</option>
 <option value="delay">Delayed mock</option>
 <option value="error">Error mock</option>
+<option value="openai">OpenAI Decisions</option>
 </select>
 <label for="c-right">Right player</label>
 <select id="c-right">
@@ -131,7 +132,10 @@
 <p id="c-progress" class="run-progress">Ready</p>
 <p id="c-error" class="comparison-error" role="alert" hidden>
 </p>
+<div class="provider-connections">
+<div id="decision-pairing-left"></div>
 <div id="decision-pairing">
+</div>
 </div>
 <details>
 <summary>Run details</summary>

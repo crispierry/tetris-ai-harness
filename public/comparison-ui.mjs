@@ -9,7 +9,7 @@ import { Comparison, DEFAULT_CONFIG, validateConfig } from './comparison.mjs';
 import { GEOMETRY } from './harness.mjs';
 import { briefing } from './briefing.mjs';
 
-const STATUS = { placing:'Placing…',ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
+const STATUS = { queued:'Waiting…', placing:'Placing…',ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped',
   over: 'Game over', error: 'Error', completed: 'Run finished', won: MARATHON_COPY.complete, capped: 'Capped', replay: 'Saved replay' };
 const SETTINGS = Object.keys(DEFAULT_CONFIG);
 function download(json, doc) {
@@ -28,12 +28,14 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   let previousAnnouncement = '', previousLaneStates = [], disposed=false;
   function render(view) {
     if(disposed)return;
-    const costLane=view.lanes[1];if(costLane)updateCost({gameId:costLane.observation.sessionId,receipt:costLane.lastDecision?.receipt,error:!!costLane.error,busy:costLane.status==='choosing',replay:view.mode==='replay',openAI:$('c-right').value==='openai',tracked:costLane.policy?.kind==='externalDecisions'});
-    SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (view.config.right==='openai' && ['nodeCap','timeMs'].includes(key)); });
-    $('c-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
+    const selected=['left','right'].map(side=>$('c-'+side).value),paid=selected.flatMap((key,i)=>key==='openai'?[i]:[]),searching=selected.some(key=>key==='look1'||key==='look2');
+    const costLanes=paid.map(i=>view.lanes[i]);updateCost({gameId:view.runId,receipts:costLanes.map(l=>l.lastDecision?.receipt).filter(Boolean),error:costLanes.some(l=>!!l.error),busy:costLanes.some(l=>['choosing','queued'].includes(l.status)),replay:view.mode==='replay',openAI:paid.length>0,tracked:costLanes.every(l=>l.policy?.kind==='externalDecisions')});
+    const risk=$('decision-budget-risk');if(risk){risk.textContent='$1 monthly project limit. Billing enforcement can be delayed; charges may exceed that limit.';risk.hidden=!paid.some(i=>pairings[i]?.session.state.mode==='project-limit-browser'||pairings[i]?.session.state.admission?.mode==='project-limit-browser');}
+    SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (!searching && ['nodeCap','timeMs'].includes(key)); });
+    $('c-reset').disabled=view.mode!=='replay'&&paid.some(i=>pairings[i]?.resetBlocked);
     const ended = view.mode === 'live' && view.sample >= view.config.samples && view.lanes.every(l => l.outcome);
-    const selectingOpenAI=$('c-right').value==='openai',pendingOpenAI=view.mode!=='replay'&&!!pairing&&selectingOpenAI&&pairing.session.state.state!=='connected';
-    const paidBlocked=view.mode!=='replay'&&selectingOpenAI&&(pendingOpenAI||(pairing?.blocked&&!view.lanes[1].outcome));
+    const pendingOpenAI=index=>view.mode!=='replay'&&paid.includes(index)&&pairings[index]?.session.state.state!=='connected';
+    const paidBlocked=view.mode!=='replay'&&paid.some(i=>pendingOpenAI(i)||(pairings[i]?.blocked&&!view.lanes[i].outcome));
     $('c-start').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
     $('c-step').disabled = paidBlocked || view.auto || view.busy || ended || !!view.archiveError;
     $('c-pause').disabled = !view.auto && !view.busy; $('c-stop').disabled = !view.locked;
@@ -45,12 +47,12 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       : `${STATUS[view.state]} · Sample ${view.sample} of ${view.config.samples} · ${view.summary.observedPairs} completed pairs`;
     text('c-progress', progress + (view.config.pieceCap < 1000 ? ' · Abbreviated run' : ''));
     view.lanes.forEach((canonical, index) => {
-      if(view.mode!=='replay')pairing?.observe(canonical.lastDecision?.receipt);
+      if(view.mode!=='replay'&&paid.includes(index))pairings[index]?.observe(canonical.lastDecision?.receipt);
       const p=canonical.error||canonical.recoveryRequired?null:canonical.presentation,lane=p?{...p.before,policy:canonical.policy,assistance:canonical.assistance,search:canonical.search,status:p.phase==='placing'?'placing':'choosing',observation:visual.get(index)??p.before.observation}:canonical;
       const prefix = `c-${index}-`, obs = lane.observation;
-      text(prefix + 'heading',index===1&&pendingOpenAI?'OpenAI Decisions':compactPlayerName(lane.player.name));
-      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: index === 1 && $('c-right').value === 'openai' && pairing?.session.state.state !== 'connected' })} · ${lane.assistance}`);
-      if(index===1&&pendingOpenAI)text(prefix+'tier',pairing?.session.state.message??'Connect to request local owner approval.');
+      text(prefix + 'heading',pendingOpenAI(index)?'OpenAI Decisions':compactPlayerName(lane.player.name));
+      text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: pendingOpenAI(index) })} · ${lane.assistance}`);
+      if(pendingOpenAI(index))text(prefix+'tier',pairings[index]?.session.state.message??'Connect to request local owner approval.');
       for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
       const active = new Map((obs.active?.cells ?? []).map(p => [`${p.x},${p.y}`, obs.active.type]));
       for (let y = 0; y < 20; y++) for (let x = 0; x < 10; x++) {
@@ -85,22 +87,24 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
     }
     if (view.archiveError) { $('c-error').hidden = false; text('c-error', view.archiveError); }
   }
-  let pairing;
-  const comparison = comparisonFactory({ onChange: render,onPlacement:event=>presenters[event.lane].play(event),providerFactory:(key,config)=>key==='openai'?pairing.session.provider:providerFor(key,config) });
-  pairing=mountDecisionPairing(doc,{mode:'comparison',lane:'right',window:win,onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings().right!=='openai')throw new Error('Select OpenAI on the right before connecting.');},onConnected:()=>{try{comparison.configure(settings());$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}});
-  const settings = () => Object.fromEntries(SETTINGS.map(key => [key, ['left', 'right'].includes(key) ? $('c-' + key).value : Number($('c-' + key).value)]));
+  let pairings=[];
+  const comparison = comparisonFactory({onChange:render,onPlacement:event=>presenters[event.lane].play(event),providerFactory:(key,config,{lane})=>key==='openai'?pairings[lane].session.provider:providerFor(key,config)});
+  const settings=()=>Object.fromEntries(SETTINGS.map(key=>[key,['left','right'].includes(key)?$('c-'+key).value:Number($('c-'+key).value)]));
+  const ready=()=>['left','right'].every((side,i)=>settings()[side]!=='openai'||pairings[i]?.session.state.state==='connected');
+  pairings=['left','right'].map((side,index)=>mountDecisionPairing(doc,{mode:'comparison',lane:side,window:win,rootId:index?'decision-pairing':'decision-pairing-left',manageBudget:false,title:`${index?'Right':'Left'} · OpenAI`,connectLabel:index?'Connect OpenAI':'Connect left OpenAI',onAvailabilityChange:()=>render(comparison.view),beforeConnect:()=>{validateConfig(settings());if(settings()[side]!=='openai')throw new Error(`Select OpenAI on the ${side} before connecting.`);},onConnected:()=>{try{if(ready())comparison.configure(settings());else render(comparison.view);$('c-error').hidden=true;text('c-error','');}catch(error){text('c-error',error.message);$('c-error').hidden=false;}}}));
+  const refresh=()=>Promise.all(pairings.map(p=>p?.refresh()));
   const act = fn => async () => {
     try { $('c-error').hidden = true; text('c-error', ''); await fn(); }
     catch (error) { $('c-error').hidden = false; text('c-error', error.message); render(comparison.view); }
   };
-  SETTINGS.forEach(key => $('c-' + key).addEventListener('change', act(() => {pairing?.setEnabled(settings().right==='openai');for(const field of ['nodeCap','timeMs'])$('c-'+field).disabled=settings().right==='openai';if(settings().right==='openai'&&pairing?.session.state.state!=='connected'){render(comparison.view);return;}comparison.configure(settings());})));
-  pairing?.setEnabled(false);
+  SETTINGS.forEach(key=>$('c-'+key).addEventListener('change',act(()=>{['left','right'].forEach((side,i)=>pairings[i]?.setEnabled(settings()[side]==='openai'));if(!ready()){render(comparison.view);return;}comparison.configure(settings());})));
+  pairings.forEach(p=>p?.setEnabled(false));
   const disposeComparison=comparison.dispose.bind(comparison);
-  comparison.dispose=()=>{if(disposed)return;disposed=true;presenters.forEach(p=>p.dispose());disposeComparison();void pairing?.session.close().catch(()=>{});};
+  comparison.dispose=()=>{if(disposed)return;disposed=true;presenters.forEach(p=>p.dispose());disposeComparison();pairings.forEach(p=>{void p?.session.close().catch(()=>{});});};
   for (const action of ['start', 'step']) $('c-' + action).addEventListener('click', act(async () => {
-    if (!comparison.view.locked) comparison.configure(settings()); await comparison[action](); await pairing?.refresh();
+    if (!comparison.view.locked) comparison.configure(settings()); await comparison[action](); await refresh();
   }));
-  for (const action of ['pause', 'stop', 'reset', 'replay']) $('c-' + action).addEventListener('click', act(async() => {comparison[action]();if(action==='reset'&&pairing?.session.state.admission?.mode==='project-limit-browser')await pairing.refresh();}));
+  for (const action of ['pause', 'stop', 'reset', 'replay']) $('c-' + action).addEventListener('click', act(async() => {comparison[action]();if(action==='reset')await refresh();}));
   $('c-export').addEventListener('click', act(() => { onExport(comparison.exportRun()); text('c-announcement', 'Exported own saved visual frames. Private sequences omitted.'); }));
   win.addEventListener?.('blur',()=>{if(comparison.view.auto||comparison.view.busy)comparison.pause();});
   win.addEventListener?.('pagehide',event=>{if(event?.persisted){if(comparison.view.auto||comparison.view.busy)comparison.pause();}else comparison.dispose();});

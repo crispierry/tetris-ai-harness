@@ -1,7 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 const fail = code => { throw Object.assign(new Error(code), {code}); };
 const hex = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
-const contexts = {solo:'solo', comparison:'right', versus:'algorithm'};
+const contexts = {solo:['solo'], comparison:['left','right'], versus:['algorithm']};
 const exact = (body, keys) => body && !Array.isArray(body) && Object.keys(body).sort().join(',') === [...keys].sort().join(',');
 export function createDecisionOwner({service, now = Date.now} = {}) {
   const pending = new Map(), delivered = new Map(), approvals = new Set();
@@ -26,7 +26,7 @@ export function createDecisionOwner({service, now = Date.now} = {}) {
     async register(body) {
       await expire();
       if (closing || held || !service.status().available) fail('unavailable');
-      if (!exact(body,['nonceDigest','mode','lane']) || !hex(body.nonceDigest) || contexts[body.mode] !== body.lane) fail('input');
+      if (!exact(body,['nonceDigest','mode','lane']) || !hex(body.nonceDigest) || (!Object.hasOwn(contexts,body.mode)||!contexts[body.mode].includes(body.lane))) fail('input');
       registrations = registrations.filter(at => at > now()-60000);
       if ([...pending.values()].filter(p=>p.state!=='delivered').length >= 8 || registrations.length >= 16) fail('rate_limit');
       registrations.push(now()); const challengeId=randomUUID(), expiresAt=now()+60000;

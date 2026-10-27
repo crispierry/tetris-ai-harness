@@ -212,3 +212,45 @@ test('browser held recovery copy refers to authenticated provider status while s
  const f=await fixture(t,{fetchImpl:upstream({status:429,errorCode:'project_spend_limit_exceeded'})}),c=new Controller({sessionId:'browser',provider:f.bridge});await c.step();assert.equal(c.view.recoveryRequired,true);assert.match(c.view.error,/See provider status before continuing/);assert.doesNotMatch(c.view.error,/Reset required/);assert.equal((await f.service.control(f.grant.capability,'runStatus')).ownerHold,true);
  let entered,release;const waitForStart=new Promise(r=>entered=r),base=heuristic(),provider={...base,kind:'remote',requiresReset:true,runMetadata:{mode:'http-fixture'},decide:()=>new Promise(r=>{release=r;entered();})},strict=new Controller({provider});const pending=strict.step();await waitForStart;strict.pause();assert.match(strict.view.error,/Reset required/);release({});await pending;
 });
+
+for(const local of ['local','look1','look2','delay','error'])for(const side of [0,1])test(`${local} can oppose live-shaped OpenAI on either side (${side}) with canonical export and zero-call replay`,async t=>{
+ let calls=0;const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})}),config={left:side===0?'openai':local,right:side===1?'openai':local,pieceCap:1,timeMs:1000},c=new Comparison({config,providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
+ try{
+  await c.step();assert.equal(c.view.lanes[side].pieces,1);assert.equal(c.view.lanes[1-side].pieces,local==='error'?0:1);assert.equal(calls,1);
+  const json=c.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);
+  if(local.startsWith('look')){const record=JSON.parse(json);const receipt=record.events.find(e=>e.lane===1-side&&e.input.kind==='computer').input.receipt;assert.equal(receipt.errorCode,null);const bad=structuredClone(record);bad.lanes[1-side].policy.search.modelCalls=1;assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(bad)));const badReceipt=structuredClone(record);badReceipt.events.find(e=>e.lane===1-side&&e.input.kind==='computer').input.receipt.requestId='foreign';assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(badReceipt)));}
+  c.replay();c.pause();for(let n=0;n<c.view.frameCount;n++)await c.step();assert.equal(calls,1);assert.equal(c.exportRun(),json);
+ }finally{c.dispose();}
+});
+
+test('two OpenAI lanes use separate grants and serialize actual upstreams without overlap, then retain two-sample canonical history',async t=>{
+ let active=0,calls=0;const f=await fixture(t,{fetchImpl:upstream({inspect:()=>{assert.equal(active,0);active++;calls++;},hold:async()=>{await wait(20);active--;}})});
+ const run=await f.service.owner.issueRun({laneId:'second',controllerSessionBase:'second'}),grant={...run,admission:await f.service.control(run.capability,'runStatus')},second=createDecisionBridge({grant,fetchImpl:f.fetchHTTP});
+ const c=new Comparison({config:{left:'openai',right:'openai',samples:2,pieceCap:1},providerFactory:(key,settings,{lane})=>lane?second:f.bridge});
+ try{
+  await c.step();assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(calls,2);assert.equal(f.store.snapshot().browserSession.ownerHold,false);
+  await c.step();assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(calls,4);assert.equal(f.store.snapshot().used.attempts,4);const json=c.exportRun(),r=JSON.parse(json);assert.equal(r.version,'decision-ui-comparison-series-1');assert.equal(r.records.length,2);assert.equal(verifyDecisionUIRecord(json).samples,2);
+  const reused=structuredClone(r);reused.records[1]=reused.records[0];assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(reused)),/session reuse/);
+  c.replay();c.pause();for(let n=0;n<c.view.frameCount;n++)await c.step();assert.equal(calls,4);assert.equal(c.exportRun(),json);
+  c.reset();await c.step();assert.equal(calls,6);assert.equal(f.store.snapshot().used.attempts,6);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);
+ }finally{c.dispose();await second.close();}
+});
+
+test('cancelling a pair with one queued paid lane never dispatches that lane or clears the first lane hold',async t=>{
+ let release,entered,calls=0;const waiting=new Promise(r=>entered=r),f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++,hold:()=>new Promise(r=>{release=r;entered();})})});
+ const run=await f.service.owner.issueRun({laneId:'queued',controllerSessionBase:'queued'}),second=createDecisionBridge({grant:{...run,admission:await f.service.control(run.capability,'runStatus')},fetchImpl:f.fetchHTTP}),c=new Comparison({config:{left:'openai',right:'openai'},providerFactory:(key,settings,{lane})=>lane?second:f.bridge});
+ try{const work=c.step();await waiting;assert.equal(c.view.lanes[1].status,'queued');c.pause();release();await work;await settle(()=>f.store.snapshot().browserSession.ownerHold);assert.equal(calls,1);assert.equal(c.view.lanes[1].pieces,0);assert.equal(f.store.snapshot().used.attempts,1);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);}finally{release?.();c.dispose();await second.close();}
+});
+
+test('actual selectors independently pair both OpenAI lanes and keep lookahead settings available',async t=>{
+ const original=globalThis.fetch;let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:upstream({usage:{input_tokens:1000,output_tokens:0,total_tokens:1000},inspect:()=>calls++})}),nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};for(const [k,v]of Object.entries(DEFAULT_CONFIG))$('c-'+k).value=String(v);
+ globalThis.fetch=async(route,o={})=>{if(route.startsWith('http'))return original(route,o);const response=await original(f.origin+route,{...o,headers:{origin:f.origin,...o.headers}});if(route==='/decision/pair/register'&&response.ok){const challenge=await response.clone().json();await f.owner.command({action:'approve',challengeId:challenge.challengeId,...JSON.parse(o.body)});}return response;};
+ const c=mountComparison({getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},{window:{}});
+ try{
+  $('c-samples').value='2';$('c-pieceCap').value='1';$('c-left').value='openai';await $('c-left').trigger('change');$('c-right').value='openai';await $('c-right').trigger('change');
+  await $('decision-pairing-left').children[1].trigger('click');assert.equal($('c-start').disabled,true);await $('decision-pairing').children[1].trigger('click');assert.equal($('c-start').disabled,false);assert.equal($('decision-budget-risk').hidden,false);
+  await $('c-step').trigger('click');assert.deepEqual(c.view.lanes.map(l=>l.pieces),[1,1]);assert.equal(calls,2);assert.match($('decision-cost').textContent,/0\.0002/);assert.equal(verifyDecisionUIRecord(c.exportRun()).ok,true);
+  await $('c-step').trigger('click');assert.equal(calls,4);assert.match($('decision-cost').textContent,/0\.0004/);assert.equal(verifyDecisionUIRecord(c.exportRun()).samples,2);
+  await $('c-reset').trigger('click');$('c-left').value='look2';await $('c-left').trigger('change');assert.equal($('c-nodeCap').disabled,false);assert.equal($('c-timeMs').disabled,false);assert.equal($('c-start').disabled,false);
+ }finally{c.dispose();globalThis.fetch=original;}
+});
