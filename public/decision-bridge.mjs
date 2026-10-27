@@ -1,3 +1,4 @@
+import {validDecisionDiagnostic,decisionErrorMessage} from './decision-errors.mjs';
 import {validBrowserAccounting,browserBlocked} from './browser-risk-contract.mjs';
 import { compactReceipt } from './provider-policy.mjs';
 // Node-free provider. Admission exists only in closure memory; no automatic enrollment.
@@ -27,7 +28,7 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
     for await (const chunk of response.body) { bytes += chunk.length; if (bytes > 65536) { await response.body.cancel?.().catch(()=>{}); fail('size'); } chunks.push(chunk); }
     const data = new Uint8Array(bytes); let offset=0; for (const chunk of chunks) { data.set(chunk,offset); offset+=chunk.length; }
     let result; try { result=JSON.parse(new TextDecoder().decode(data)); } catch { fail('schema'); }
-    if (!response.ok) fail(typeof result.error === 'string' && /^[a-z_]{1,40}$/.test(result.error) ? result.error : 'unavailable'); return result;
+    if (!response.ok){const code=typeof result.error === 'string'&&/^[a-z_]{1,40}$/.test(result.error)?result.error:'unavailable';throw Object.assign(new Error(decisionErrorMessage(code,result.diagnostic)),{code,...(validDecisionDiagnostic(result.diagnostic)?{diagnostic:result.diagnostic}:{})});}return result;
   }
   async function boundedControl(work){const abort=new AbortController();let timer;try{return await Promise.race([work(abort.signal),new Promise((_,reject)=>{timer=setTimeout(()=>{abort.abort();reject(Object.assign(new Error('confirmation_timeout'),{code:'confirmation_timeout'}));},1500);})]);}finally{clearTimeout(timer);abort.abort();}}
   async function confirmCommitted(requestId,gravityResult){
@@ -79,7 +80,7 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
         }
         if (new TextEncoder().encode(JSON.stringify({packet})).length > 1048576) fail('size');
         job.dispatched=true;let result;try{result=await post('/decision/choice',{packet,...(gravity?{gravity:true}:{})},signal);current();
-        const choice=result.choice;
+        const choice=result.choice;if(result.receipt?.version==='decision-browser-forced-receipt-1'&&(packet.candidates.length!==1||choice?.selectedCandidateId!==packet.candidates[0].id||result.receipt.placements!==(gravity?0:1)))fail('schema');
         if (!choice || Object.keys(choice).length!==3 || choice.requestId!==packet.requestId || choice.stateRevision!==packet.stateRevision || !packet.candidates.some(c=>c.id===choice.selectedCandidateId) || new TextEncoder().encode(JSON.stringify(choice)).length>4096) fail('schema');
         if (job.id >= receiptSerial) { receipt=compactReceipt(result.receipt); receiptSerial=job.id; }
         if(browser)job.awaitingCommit=true;

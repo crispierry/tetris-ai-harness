@@ -1,4 +1,9 @@
 import {instructionPacket} from '../public/briefing.mjs';
+import {singlePlacementPacket} from './helpers/single-placement.mjs';
+import {createGravityTurn,stateFromObservation,gravityObservation} from '../public/ai-gravity.mjs';
+import {recordedObservation} from '../public/decision-record.mjs';
+import {validBrowserReceipt} from '../public/browser-risk-contract.mjs';
+import {estimateDecisionNanos} from '../public/test-cost.mjs';
 import {GravityController} from '../public/gravity-controller.mjs';
 import {gravityPolicy} from '../public/ai-gravity.mjs';
 import {fakeClock} from './helpers/fake-clock.mjs';
@@ -301,4 +306,67 @@ test('lost gravity acknowledgement retains the real board and one request with a
  const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,o)=>{const body=JSON.parse(o.body),response=await f.fetchHTTP(route,o);if(body.action==='settleGravity'){acks++;throw new Error('dummy lost gravity acknowledgement');}return response;}});
  const c=new GravityController({sessionId:'browser',provider:bridge,clock,onTransition:({input,view})=>journal.append(0,input,view)});journal=new DecisionJournal({mode:'solo'});journal.addLane(0,'computer',c.view,gravityPolicy(providerPolicy(bridge)));
  const step=c.step();await step;assert.equal(c.view.pieces,1);assert.equal(c.view.status,'error');assert.equal(c.view.recoveryRequired,true);assert.equal(acks,1);assert.equal(f.store.snapshot().used.attempts,1);assert.equal(f.store.snapshot().browserSession.ownerHold,true);assert.equal(clock.size,0);assert.equal(verifyDecisionUIRecord(journal.exportRun()).ok,true);await bridge.close();
+});
+
+for(const gravity of [false,true])test(`one legal placement is a checked free forced move with gravity ${gravity}`,async t=>{
+ let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:async()=>{calls++;throw Error('single-choice request must never reach OpenAI');}}),p=singlePlacementPacket({gravity});
+ assert.equal(p.candidates.length,1);const signal=new AbortController(),choice=await f.bridge.decide(p,{signal:signal.signal,gravity});
+ const receipt=f.bridge.lastReceipt;assert.equal(receipt.version,'decision-browser-forced-receipt-1');assert.equal(validBrowserReceipt(receipt),true);assert.equal(receipt.attempts,0);assert.equal(receipt.completedResponses,0);assert.equal(receipt.observedModel,null);assert.equal(receipt.usage,null);assert.equal(estimateDecisionNanos(receipt),0n);assert.equal(calls,0);
+ signal.abort('placement-committed');
+ if(gravity){const binding={sessionId:p.observation.sessionId,revision:p.stateRevision},turn=createGravityTurn(stateFromObservation(p.observation),binding);turn.choose(choice.selectedCandidateId);await f.bridge.confirmGravity(p.requestId,{proof:turn.proof,observation:recordedObservation(gravityObservation(turn,binding))});}
+ else await f.bridge.confirmCommitted(p.requestId);
+ const a=await f.bridge.status();assert.equal(validBrowserAccounting(a),true);assert.equal(a.attempts,0);assert.equal(a.remainingAttempts,1000);assert.equal(a.runAttempts,0);assert.equal(a.completions,0);assert.equal(a.forcedMoves,1);assert.equal(a.placements,1);assert.equal(a.ownerHold,false);
+ assert.equal(Object.values(f.store.snapshot().requests)[0].deliveryPending,false);
+});
+
+test('truncating a multi-choice packet cannot obtain a free forced move',async t=>{
+ let calls=0;const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})}),p=structuredClone(await packet());p.candidates=p.candidates.slice(0,1);
+ await assert.rejects(f.service.decide(f.grant.capability,p),{code:'input'});assert.equal(calls,0);assert.equal(f.store.snapshot().used.attempts,0);
+});
+
+test('HTTP failure diagnostics retain status and request ID without exposing private provider text',async t=>{
+ const f=await fixture(t,{httpServer:true,fetchImpl:async()=>new Response(JSON.stringify({error:{code:'invalid_request_error',message:'Two choices required. '+dummy+' proj_dummy_browser '+fingerprint}}),{status:400,headers:{'x-request-id':'req_dummy_failure'}})});
+ await assert.rejects(f.bridge.decide(await packet()),error=>error.code==='provider_error'&&/HTTP 400, invalid_request_error/.test(error.message));
+ const entry=Object.values(f.store.snapshot().requests)[0];assert.equal(entry.status,'rejected');assert.equal(entry.failure.public.status,400);assert.equal(entry.failure.public.requestId,'req_dummy_failure');assert.equal(entry.failure.public.phase,'decode');
+ const a=await f.bridge.status();assert.equal(validBrowserAccounting(a),true);assert.match(browserStatus(a,f.grant.admission),/HTTP 400/);assert.equal(a.ownerHold,true);
+ const visible=JSON.stringify(a);for(const secret of [dummy,fingerprint,'proj_dummy_browser','Two choices required'])assert(!visible.includes(secret));
+ assert.match(entry.failure.message,/Two choices required/);for(const secret of [dummy,fingerprint,'proj_dummy_browser'])assert(!entry.failure.message.includes(secret));
+});
+
+test('network failure and an actual decision deadline have distinct diagnostics and retain holds',async t=>{
+ const f=await fixture(t,{fetchImpl:async()=>{throw Object.assign(new TypeError('fetch failed'),{cause:{code:'ECONNRESET'}});}});
+ await assert.rejects(f.service.decide(f.grant.capability,await packet()),{code:'transport_ambiguous'});const entry=Object.values(f.store.snapshot().requests)[0];assert.equal(entry.failure.public.status,null);assert.equal(entry.failure.public.phase,'dispatch');assert.equal(entry.failure.transportCode,'ECONNRESET');assert.equal(entry.status,'uncertain');
+ let release;const x=await fixture(t,{fetchImpl:upstream({hold:()=>new Promise(r=>release=r)})});
+ try{await assert.rejects(x.service.decide(x.grant.capability,await packet()),{code:'decision_timeout'});assert.equal(Object.values(x.store.snapshot().requests)[0].failure.public.code,'decision_timeout');assert.equal(x.store.snapshot().browserSession.ownerHold,true);}finally{release?.();await wait(0);}
+});
+
+test('the observed 49th-turn failure replays as a verifiable forced placement with no 49th upstream call',async t=>{
+ // Public placement ordering from the failed game, with no private seed state or provider response bodies.
+ const choices=[19,6,1,7,3,3,34,5,5,34,5,3,5,16,9,5,7,8,9,4,19,3,10,4,3,5,5,5,14,6,3,6,15,21,6,11,37,1,8,17,4,5,2,9,7,5,7,5];let calls=0,journal;
+ const f=await fixture(t,{httpServer:true,fetchImpl:async(url,o)=>{const request=JSON.parse(o.body),ids=request.questions[0].choices.map(x=>x.value);assert(ids.length>=2);const selected=choices[calls++];assert(selected<ids.length);return new Response(JSON.stringify({model:'gpt-6-luna',answers:[{name:'placement',type:'choice',choice:ids[selected],confidence:1,probabilities:ids.map((value,i)=>({value,probability:i===selected?1:0}))}],usage:{input_tokens:100,output_tokens:0,total_tokens:100}}));}});
+ const c=new GravityController({seed:2659805975,sessionId:'browser',provider:f.bridge,onTransition:({input,view})=>journal.append(0,input,view)});journal=new DecisionJournal({mode:'solo'});journal.addLane(0,'computer',c.view,gravityPolicy(providerPolicy(f.bridge)));
+ for(let n=0;n<49;n++){await c.step();assert.equal(c.view.error,null);}
+ assert.equal(calls,48);assert.equal(c.view.pieces,49);assert.equal(c.view.lastDecision.receipt.version,'decision-browser-forced-receipt-1');assert.equal(f.store.snapshot().used.attempts,48);const a=await f.bridge.status();assert.equal(a.ownerHold,false);assert.equal(a.forcedMoves,1);assert.equal(a.completions,48);assert.equal(a.placements,49);
+ const record=journal.exportRun({metadata:{accounting:a}});assert.equal(verifyDecisionUIRecord(record).ok,true);
+ const forged=JSON.parse(record),first=forged.events.find(e=>e.input.kind==='gravity'&&e.input.selectedCandidateId);first.input.receipt={...first.input.receipt,...c.view.lastDecision.receipt,requestId:first.input.requestId,stateRevision:first.input.revision,selectedCandidateId:first.input.selectedCandidateId};assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(forged)),/exactly one legal candidate/);
+});
+
+test('session expiry during an upstream request is not reported as a decision timeout',async t=>{
+ const configuration=config();configuration.policy.expiresAt=Date.now()+1000;let release;
+ const f=await fixture(t,{configuration,fetchImpl:upstream({hold:()=>new Promise(r=>release=r)})});
+ try{await assert.rejects(f.service.decide(f.grant.capability,await packet()),{code:'session_expired'});const s=f.store.snapshot();assert.equal(s.browserSession.reason,'session_expired');assert.equal(Object.values(s.requests)[0].failure.public.code,'session_expired');assert.equal(s.used.attempts,1);}finally{release?.();await wait(0);}
+});
+
+for(const status of [400,503])test(`non-JSON HTTP ${status} preserves the HTTP failure instead of reporting invalid decision JSON`,async t=>{
+ const f=await fixture(t,{httpServer:true,fetchImpl:async()=>new Response('<html>Upstream error</html>',{status,headers:{'content-type':'text/html','x-request-id':'req_html_failure'}})});
+ await assert.rejects(f.bridge.decide(await packet()),error=>error.code==='provider_error'&&error.message.includes('HTTP '+status));const entry=Object.values(f.store.snapshot().requests)[0];assert.equal(entry.status,'rejected');assert.equal(entry.failure.public.status,status);assert.equal(entry.failure.public.requestId,'req_html_failure');assert.equal(f.store.snapshot().browserSession.ownerHold,true);
+});
+
+test('a malformed HTTP 200 remains an uncertain decision rather than a safe rejection',async t=>{
+ const f=await fixture(t,{fetchImpl:async()=>new Response('<html>Not a decision</html>',{status:200})});await assert.rejects(f.service.decide(f.grant.capability,await packet()),{code:'schema'});const s=f.store.snapshot();assert.equal(Object.values(s.requests)[0].status,'uncertain');assert.equal(s.browserSession.ownerHold,true);
+});
+
+test('a stale refusal diagnostic cannot mask a newer acknowledgement hold',async t=>{
+ const f=await fixture(t,{fetchImpl:upstream({refusal:true})});await assert.rejects(f.service.decide(f.grant.capability,await packet()),{code:'refusal'});const a=await f.service.control(f.grant.capability,'runStatus');assert.equal(a.lastFailure.code,'refusal');
+ for(const reason of ['completion_unacknowledged','request_interrupted']){const message=browserStatus({...a,reason,ownerHold:true,reconciliationRequired:true},f.grant.admission);assert.match(message,/interrupted/);assert.doesNotMatch(message,/declined/);}
 });

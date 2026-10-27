@@ -5,11 +5,12 @@ import {createHash} from 'node:crypto';
 import {openDecisionStore,digest} from './decision-store.mjs';
 import {readPrivateOwnerFile} from './decision-bootstrap.mjs';
 import {qualifiedDecisionBrowser} from './decision-browser-qualification.mjs';
+import {canonicalPacket} from './decision-service.mjs';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 async function proof(reference){const bytes=await readPrivateOwnerFile(reference,65536);return {reference,sha256:sha(bytes),value:JSON.parse(bytes)};}
 async function backup(file,bytes){let h;try{h=await open(file,'wx',0o600);await h.writeFile(bytes);await h.sync();}catch(e){if(e.code!=='EEXIST'||!Buffer.from(await readPrivateOwnerFile(file,16000000)).equals(bytes))throw e;}finally{await h?.close();}const d=await open(path.dirname(file),'r');try{await d.sync();}finally{await d.close();}}
-export async function reconcileAbandonedBrowserRequest({config,expectedLedgerSHA256,requestKey,authorizationReference,drainReference,successorLineage}={}){
+export async function reconcileAbandonedBrowserRequest({config,expectedLedgerSHA256,requestKey,authorizationReference,drainReference,successorLineage,rejectedPacketReference}={}){
  if(config?.policy?.kind!=='risk-accepted-project-browser-policy-1'||digest(config.qualification)!==config.policy.qualificationDigest||!/^[A-Za-z0-9_-]{1,80}$/.test(successorLineage??'')||successorLineage===config.lineage)fail('recovery_input');
  const authority=await proof(authorizationReference),drain=await proof(drainReference),d=drain.value;
  if(authority.value.actor!=='Cris'||d.supervisedExitCode!==0||d.localFetchAndResponseStreamSettled!==true||d.ledgerOwnerLockReleased!==true||d.afterDrainLedgerSHA256!==expectedLedgerSHA256||!Number.isSafeInteger(d.serverPID)||d.serverPID<=1)fail('recovery_evidence');
@@ -17,10 +18,16 @@ export async function reconcileAbandonedBrowserRequest({config,expectedLedgerSHA
  const store=await openDecisionStore({...config,ownerRecovery:{expectedLedgerSHA256}});
  try{
   const before=await store.inspect(),entry=before.requests[requestKey];
-  if(before.successor||before.browserSession?.ownerHold!==true||before.browserSession.reason!=='request_interrupted'||!entry||entry.status!=='uncertain'||entry.deliveryPending!==false||Object.values(before.runs).some(r=>!r.closed)||Object.values(before.requests).filter(r=>r.status==='uncertain').length!==1||Object.values(before.requests).some(r=>r.deliveryPending||['reserved','dispatch-intent'].includes(r.status)))fail('recovery_state');
+  let rejectedSingletonEvidence;
+  if(rejectedPacketReference){
+   const packet=await proof(rejectedPacketReference);
+   if(entry?.status!=='rejected'||before.browserSession?.reason!=='transport_ambiguous'||packet.value?.candidates?.length!==1||digest(canonicalPacket(packet.value,{gravity:true}))!==entry.digest)fail('recovery_rejected_evidence');
+   rejectedSingletonEvidence={reference:packet.reference,sha256:packet.sha256,requestDigest:entry.digest};
+  }
+  if(before.successor||before.browserSession?.ownerHold!==true||(!rejectedSingletonEvidence&&before.browserSession.reason!=='request_interrupted')||!entry||entry.status!==(rejectedSingletonEvidence?'rejected':'uncertain')||entry.deliveryPending!==false||Object.values(before.runs).some(r=>!r.closed)||Object.values(before.requests).filter(r=>r.status==='uncertain').length!==(rejectedSingletonEvidence?0:1)||Object.values(before.requests).some(r=>r.deliveryPending||['reserved','dispatch-intent'].includes(r.status)))fail('recovery_state');
   const bytes=await readFile(path.join(config.directory,'ledger.json'));if(sha(bytes)!==expectedLedgerSHA256)fail('recovery_conflict');
   const backupFile=path.join(config.directory,`before-recovery-${expectedLedgerSHA256}.json`);await backup(backupFile,bytes);
-  const body={version:1,resolution:'owner-abandon-no-retry',actor:'Cris',recordedAt:Date.now(),upstreamOutcome:'unknown',actualCostUSD:null,requestKey,originalEntry:structuredClone(entry),beforeLedgerSHA256:expectedLedgerSHA256,backupFile,authorization:{reference:authority.reference,sha256:authority.sha256},drain:{reference:drain.reference,sha256:drain.sha256,localFetchAndResponseStreamSettled:true,supervisedExitCode:0,ledgerOwnerLockReleased:true},successorLineage};const id=digest(body),event={id,...body};
+  const body={version:1,resolution:'owner-abandon-no-retry',actor:'Cris',recordedAt:Date.now(),upstreamOutcome:'unknown',actualCostUSD:null,requestKey,originalEntry:structuredClone(entry),beforeLedgerSHA256:expectedLedgerSHA256,backupFile,authorization:{reference:authority.reference,sha256:authority.sha256},drain:{reference:drain.reference,sha256:drain.sha256,localFetchAndResponseStreamSettled:true,supervisedExitCode:0,ledgerOwnerLockReleased:true},successorLineage,...(rejectedSingletonEvidence?{rejectedSingletonEvidence}:{})};const id=digest(body),event={id,...body};
   await store.transact(s=>{if(digest(s)!==digest(before))fail('recovery_conflict');s.ownerReconciliations={...(s.ownerReconciliations??{}),[id]:event};s.requests[requestKey]={...s.requests[requestKey],status:'reconciled-abandoned',reconciliationId:id};for(const r of Object.values(s.runs)){r.closed=true;r.interrupted=true;}s.browserSession={version:1,ownerHold:true,reconciliationRequired:true,reason:'owner_abandoned_retired'};});
   return {reconciliationId:id,backupFile,usedAttempts:before.used.attempts,providerOutcome:'unknown',actualCostUSD:null,retired:true};
  }finally{await store.close();}
