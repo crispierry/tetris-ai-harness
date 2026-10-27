@@ -47,3 +47,8 @@ test('compact request is substantially smaller without discarding any candidate'
  const p=packetFor(start(createGame(7))),legacy=requestFor('decisions',p,{model:'gpt-6-luna'},{format:LEGACY_CHOICE_VERSION}),compact=requestFor('decisions',p,{model:'gpt-6-luna'},{format:COMPACT_CHOICE_VERSION});
  assert(Buffer.byteLength(JSON.stringify(compact.body))<Buffer.byteLength(JSON.stringify(legacy.body))*.65);assert.equal(compact.body.questions[0].choices.length,legacy.body.questions[0].choices.length);
 });
+test('winning compact moves retain the original five-piece preview and stop before spawning',()=>{
+ const initial=start(createGame(53)),board=initial.board.map(row=>[...row]);board[19]=Array.from({length:10},(_,x)=>x===5?null:'J');
+ const packet=packetFor({...initial,board,active:{type:'I',rotation:1,x:3,y:0},lines:299,level:30}),input=compactDecisionInput(packet),winner=packet.candidates.findIndex(c=>c.afterstate.status==='won');
+ assert(winner>=0);const move=input.moves[winner];assert.equal(move.after.active,null);assert.equal(move.after.previewRemaining,5);assert.equal(input.current.lines+move.change.lines,300);assert.deepEqual(input.current.next,packet.candidates[winner].afterstate.next);
+});
