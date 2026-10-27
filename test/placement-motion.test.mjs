@@ -42,7 +42,7 @@ test('versus human gravity/input remain independent during algorithm Placing and
 });
 
 test('actual provider confirmation completes before facade animation starts; friendly depth2 errors preserve unrelated reasons',async()=>{
- let committed=false,animated=false;const base=heuristic();const v=new HumanVersus({providerFactory:()=>({...base,confirmCommitted:async()=>{committed=true;}}),onPlacement:()=>{animated=true;assert.equal(committed,true);return Promise.resolve();}});await v.stepAlgorithm();assert(animated);v.dispose();const p={runMetadata:{search:{depth:2}},lastSearch:{error:{code:'timeout',reason:'time budget'}}};assert.match(depth2Error(p,'raw','comparison'),/Advanced run settings/);assert.doesNotMatch(depth2Error(p,'raw','versus'),/Advanced/);p.lastSearch.error={code:'cancelled',reason:'cancelled'};assert.equal(depth2Error(p,'cancelled actual','versus'),'cancelled actual');
+ let committed=false,animated=false;const base=heuristic();const v=new HumanVersus({providerFactory:()=>({...base,confirmCommitted:async()=>{committed=true;}}),onPlacement:()=>{animated=true;assert.equal(committed,true);return Promise.resolve();}});await v.stepAlgorithm();assert(animated);v.dispose();const p={runMetadata:{search:{depth:2}},lastSearch:{error:{code:'timeout',reason:'time budget'}}};assert.match(depth2Error(p,'raw','comparison'),/Run settings/);assert.doesNotMatch(depth2Error(p,'raw','versus'),/Run settings/);p.lastSearch.error={code:'cancelled',reason:'cancelled'};assert.equal(depth2Error(p,'cancelled actual','versus'),'cancelled actual');
 });
 
 
@@ -58,3 +58,5 @@ test('replay Pause settles the saved committed frame and generation fences its o
 test('entering replay during terminal motion freezes the exact earlier exported bytes',async()=>{
  const gates=[],c=new Comparison({config:{left:'local',right:'local',pieceCap:1},onPlacement:e=>new Promise(r=>gates[e.lane]=r)});const step=c.step();await until(()=>gates.length===2&&gates.every(Boolean));const original=c.exportRun();c.replay();await step;c.pause();assert.equal(c.exportRun(),original);gates.forEach(r=>r());c.dispose();
 });
+
+test('search limit errors identify depth6 and stale search metadata cannot invent a new error',()=>{const p={runMetadata:{search:{depth:6,version:'visible-beam-search-1'}},lastSearch:{error:{code:'timeout',reason:'time budget'}}};assert.match(depth2Error(p,'raw','comparison'),/Depth 6/);assert.match(depth2Error(p,'raw','solo'),/lower the depth/);assert.equal(depth2Error(p,null,'comparison'),null);});

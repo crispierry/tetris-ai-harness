@@ -3,15 +3,18 @@ import { providerPolicy, compactReceipt, localSearchReceipt } from './provider-p
 import { DecisionJournal, DECISION_RECORD_LIMITS } from './decision-record.mjs';
 import { Controller, heuristic, mockProvider, HEURISTIC_WEIGHTS } from './controller.mjs';
 import { createLookaheadProvider, LOOKAHEAD_VERSION } from './lookahead.mjs';
+import {createConfigurableLookaheadProvider,BEAM_VERSION} from './beam-lookahead.mjs';
 import { freeze, VERSIONS } from './harness.mjs';
 import { RULES } from './engine.mjs';
 
 export const COMPARISON_VERSION = 'offline-comparison-2';
 export const LIMITS = freeze({ samples: 8, pieceCap: 1000, paceMin: 30, paceMax: 1000,
   nodeCap: 4000, timeMs: 1000, deadlineMs: 1500, placements: 2000, frames: 4000, exportBytes: 8 * 1024 * 1024 });
-export const PLAYERS = freeze({ local: 'Local heuristic', look1: 'Lookahead depth 1', look2: 'Lookahead depth 2',
+export const PLAYERS = freeze({ lookahead:'Lookahead',
   delay: 'Delayed mock', error: 'Error mock', openai:'OpenAI Decisions' });
-export const DEFAULT_CONFIG = freeze({ left: 'local', right: 'look1', samples: 1, pieceCap: 1000, paceMs: 150, nodeCap: 4000, timeMs: 500 });
+// Historical keys remain readable by offline fixtures and saved-run tooling, not player menus.
+const LEGACY_PLAYERS=freeze({local:true,look1:true,look2:true});
+export const DEFAULT_CONFIG = freeze({ left:'lookahead', right:'lookahead', leftDepth:1, rightDepth:2, samples:1, pieceCap:1000, paceMs:150, nodeCap:4000, timeMs:500 });
 const bytes = value => new TextEncoder().encode(typeof value==='string'?value:JSON.stringify(value)).length;
 const copy = value => JSON.parse(JSON.stringify(value));
 let instances = 0;
@@ -19,8 +22,8 @@ export function validateConfig(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('Settings must be an object.');
   const c = { ...DEFAULT_CONFIG, ...input };
   if (Object.keys(c).some(k => !Object.hasOwn(DEFAULT_CONFIG, k))) throw new RangeError('Unknown comparison setting.');
-  for (const key of ['left', 'right']) if (!Object.hasOwn(PLAYERS, c[key])) throw new RangeError(`${key} player is unavailable. Choose a local player or mock.`);
-  for (const [key, min, max] of [['samples', 1, 8], ['pieceCap', 1, 1000], ['paceMs', 30, 1000], ['nodeCap', 1, 4000], ['timeMs', 1, 1000]]) {
+  for (const key of ['left', 'right']) if (!Object.hasOwn(PLAYERS,c[key])&&!Object.hasOwn(LEGACY_PLAYERS,c[key])) throw new RangeError(`${key} player is unavailable. Choose Lookahead, OpenAI, or a test player.`);
+  for (const [key, min, max] of [['leftDepth',1,6],['rightDepth',1,6],['samples', 1, 8], ['pieceCap', 1, 1000], ['paceMs', 30, 1000], ['nodeCap', 1, 4000], ['timeMs', 1, 1000]]) {
     if (!Number.isInteger(c[key]) || c[key] < min || c[key] > max) throw new RangeError(`${key} must be a whole number from ${min} to ${max}.`);
   }
   if (2 * c.samples * c.pieceCap > LIMITS.placements) throw new RangeError('Planned placements exceed 2000.');
@@ -28,6 +31,7 @@ export function validateConfig(input = {}) {
 }
 export function providerFor(key, config) {
   if (key==='openai') throw new Error('Connect OpenAI before playing.');
+  if(key==='lookahead')return createConfigurableLookaheadProvider({depth:config.depth??2,nodeCap:config.nodeCap??4000,callCap:config.nodeCap??4000,timeMs:config.timeMs??500});
   if (key === 'local') return heuristic();
   if (key === 'delay' || key === 'error') return mockProvider({ mode: key, delayMs: 250 });
   return createLookaheadProvider({ depth: key === 'look2' ? 2 : 1, nodeCap: config.nodeCap, callCap: config.nodeCap, timeMs: config.timeMs });
@@ -52,6 +56,7 @@ function compactSearch(provider) {
 function lanePolicy(provider, key) {
   if(provider.kind==='remote') return providerPolicy(provider);
   const p = provider.runMetadata?.search;
+  if(p?.version===BEAM_VERSION)return providerPolicy(provider);
   if (!p) return freeze({ version: provider.version, kind: provider.kind, assistance: 'canonical-afterstates-v1',
     weights: HEURISTIC_WEIGHTS, tieOrder: 'Original candidate order', terminalPenalty: -1000000000, completionReward: 1000000000,
     fixture: key === 'delay' || key === 'error' ? { mode: key, delayMs: 250 } : null,
@@ -92,12 +97,12 @@ export class Comparison {
   #laneView(lane) {
     const view = lane.controller.view;
     return freeze({ ...view,presentation:lane.presentation??null,error:depth2Error(lane.provider,view.error,'comparison'), status: this.#waiting.has(lane)?'queued':lane.outcome?.status ?? view.status, outcome: lane.outcome,
-      assistance: lane.key.startsWith('look') ? `visible-depth-${lane.key.slice(-1)}-full-occupancy-v1` : 'canonical-afterstates-v1',
+      assistance: lane.provider.runMetadata?.search?.tier??'canonical-afterstates-v1',
       search: compactSearch(lane.provider), policy: lane.policy });
   }
   #emit() { this.#onChange(this.view); }
   #setup() {
-    const providers=['left','right'].map((side,index)=>this.#factory(this.#config[side],this.#config,{sample:this.#sample+1,lane:index})),canonical=providers.some(p=>p.kind==='remote');
+    const providers=['left','right'].map((side,index)=>this.#factory(this.#config[side],{...this.#config,depth:this.#config[side+'Depth']},{sample:this.#sample+1,lane:index})),canonical=providers.some(p=>p.kind==='remote');
     this.#lanes = ['left', 'right'].map((side, index) => {
       const key = this.#config[side], provider = providers[index];
       const lane = { key, provider, outcome: null, controller: null, presentation:null,capturing:false,before:null,policy: canonical?providerPolicy(provider):lanePolicy(provider, key) };

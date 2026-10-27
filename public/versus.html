@@ -64,7 +64,7 @@
 </section>
 <section class="lane" aria-labelledby="v-1-heading">
 <div class="lane-heading">
-<h2 id="v-1-heading">Local heuristic</h2>
+<h2 id="v-1-heading">Lookahead · 2</h2>
 <span id="v-1-status" class="lane-status">Ready</span>
 </div>
 <div id="v-1-board" class="comparison-board" role="img" aria-label="Empty Tetris board">
@@ -97,15 +97,14 @@
 </section>
 </div>
 <aside class="control-rail" aria-label="Shared play controls">
+<div class="player-settings single-player-settings"><div class="player-choice">
 <label for="v-provider">Computer</label>
-<select id="v-provider">
-<option value="local">Local heuristic</option>
-<option value="look1">Lookahead depth 1</option>
-<option value="look2">Lookahead depth 2</option>
+<select id="v-provider"><option value="lookahead" selected>Lookahead</option>
 <option value="openai">OpenAI Decisions</option>
 <option value="delay">Delayed mock</option>
-<option value="error">Error mock</option>
-</select>
+<option value="error">Error mock</option></select></div>
+<label class="depth-control" for="v-depth">Depth<select id="v-depth"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label>
+</div>
 <div class="play-toolbar">
 <p id="decision-cost" class="test-cost" hidden>
 </p>
@@ -158,6 +157,7 @@
 <details>
 <summary>How to play</summary>
 <p class="note">Clear 300 lines. Every 10 lines raises the level, up to 30. Start continues; Stop retains the board. Reset repeats the sequence.</p>
+<p class="note">Lookahead depth counts the current piece and visible next pieces, up to six total. Search keeps four promising branches at each step.</p>
 <p class="note">Keyboard required. ↓ soft drop; X also rotates. Leaving your board pauses both games. Step computer freezes human time while placing one computer piece.</p>
 </details>
 </aside>

@@ -25,7 +25,7 @@ export function compactReceipt(receipt) {
 export function localSearchReceipt(receipt) {
  if(!receipt)return null;
  if(receipt.version==='decision-browser-receipt-1'){if(!validBrowserReceipt(receipt)||size(receipt)>4096)throw new Error('Invalid browser compact receipt');return freeze(JSON.parse(JSON.stringify(receipt)));}
- const stats=['nodes','evaluatorCalls','rootsOffered','rootsCompleted','childrenEnumerated','leavesEvaluated','pruned','elapsedMs'];
+ const stats=['nodes','evaluatorCalls','rootsOffered','rootsCompleted','childrenEnumerated','leavesEvaluated','pruned','elapsedMs','depthRequested','depthReached','selectedDepth','beamWidth','expandedStates','earlyTerminal'];
  if(typeof receipt.requestId!=='string' || receipt.requestId.length>200 || !receipt.search || Object.keys(receipt.search).some(k=>!stats.includes(k)) || Object.values(receipt.search).some(v=>!Number.isFinite(v)||v<0))throw new Error('Invalid local search receipt.');
  const result={requestId:receipt.requestId,errorCode:receipt.errorCode,search:receipt.search,usage:null,actualCostUSD:null,provenance:'Local/mock leaf evaluations; no live model calls'};
  if(size(result)>4096)throw new Error('Local search receipt exceeds recording limit.');

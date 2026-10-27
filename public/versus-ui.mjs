@@ -27,6 +27,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     const costLane=view.lanes[1];if(costLane)updateCost({gameId:costLane.observation.sessionId,receipt:costLane.lastDecision?.receipt,error:!!costLane.error,busy:costLane.status==='choosing',replay:view.mode==='replay',openAI:$('v-provider')?.value==='openai',tracked:view.policies?.[1]?.kind==='externalDecisions'});
     $('v-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     if($('v-provider'))$('v-provider').disabled=view.frameCount>0;
+    const depth=$('v-depth');if(depth){depth.disabled=view.frameCount>0||$('v-provider')?.value!=='lookahead';if(depth.parentNode)depth.parentNode.hidden=$('v-provider')?.value!=='lookahead';}
     const pendingOpenAI=view.mode!=='replay'&&!!pairing&&$('v-provider')?.value==='openai'&&pairing.session.state.state!=='connected';
     if($('v-1-heading'))text('v-1-heading',pendingOpenAI?'OpenAI Decisions':compactPlayerName(view.lanes[1].player.name));
     if($('v-1-heading'))$('v-1-heading').title=view.lanes[1].player.name;
@@ -84,10 +85,11 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     if (!view.running) lastFrame = null;
   }
   const runner = runnerFactory({ onChange: render,onPlacement:event=>presenter.play(event) });
-  const select=$('v-provider');let pairing;
-  const configure=()=>{if(select.value==='openai'&&pairing?.session.state.state!=='connected'){render(runner.view);return;}runner.configure(()=>select.value==='openai'?pairing.session.provider:providerFor(select.value,{nodeCap:4000,timeMs:500}));$('v-message').hidden=true;text('v-message','');};
+  const select=$('v-provider'),depth=$('v-depth');if(depth&&!/^[1-6]$/.test(depth.value))depth.value='2';let pairing;
+  const configure=()=>{if(select.value==='openai'&&pairing?.session.state.state!=='connected'){render(runner.view);return;}runner.configure(()=>select.value==='openai'?pairing.session.provider:providerFor(select.value,{depth:Number(depth?.value??2),nodeCap:4000,timeMs:500}));$('v-message').hidden=true;text('v-message','');};
   pairing=mountDecisionPairing(doc,{mode:'versus',lane:'algorithm',window:win,onAvailabilityChange:()=>render(runner.view),beforeConnect:()=>{if(select.value!=='openai')throw new Error('Select OpenAI before connecting.');},onConnected:()=>{if(select?.value==='openai'){try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}}}});
   select?.addEventListener('change',()=>{pairing?.setEnabled(select.value==='openai');try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);render(runner.view);}});
+  depth?.addEventListener('change',()=>{try{configure();}catch(error){$('v-message').hidden=false;text('v-message',error.message);}});
   pairing?.setEnabled(false);
   const act = fn => async () => { try { $('v-message').hidden = true; text('v-message', ''); await fn();await pairing?.refresh(); } catch (error) { $('v-message').hidden = false; text('v-message', error.message); } };
   const pause = () => { lastFrame = null; if (runner.view.running || runner.view.busy || runner.view.playback) runner.pause(); };
@@ -117,7 +119,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
   const dispose = () => { if(disposed)return;disposed = true; win.cancelAnimationFrame(frameHandle);presenter.dispose(); runner.dispose();void pairing?.session.close().catch(()=>{}); };
   win.addEventListener('pagehide',event=>{if(event?.persisted){pause();presenter.cancel();win.cancelAnimationFrame(frameHandle);frameHandle=null;}else dispose();});
   win.addEventListener('pageshow',event=>{if(event.persisted&&!disposed&&frameHandle===null){lastFrame=null;frameHandle=win.requestAnimationFrame(frame);}});
-  render(runner.view); frameHandle = win.requestAnimationFrame(frame);
+  if(select?.value==='lookahead')configure();else render(runner.view); frameHandle = win.requestAnimationFrame(frame);
   return { runner, dispose };
 }
 if (typeof document !== 'undefined' && typeof window !== 'undefined') mountVersus(document, { window });

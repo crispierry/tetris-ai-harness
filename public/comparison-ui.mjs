@@ -28,10 +28,11 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   let previousAnnouncement = '', previousLaneStates = [], disposed=false;
   function render(view) {
     if(disposed)return;
-    const selected=['left','right'].map(side=>$('c-'+side).value),paid=selected.flatMap((key,i)=>key==='openai'?[i]:[]),searching=selected.some(key=>key==='look1'||key==='look2');
+    const selected=['left','right'].map(side=>$('c-'+side).value),paid=selected.flatMap((key,i)=>key==='openai'?[i]:[]),searching=selected.some(key=>['lookahead','look1','look2'].includes(key));
     const costLanes=paid.map(i=>view.lanes[i]);updateCost({gameId:view.runId,receipts:costLanes.map(l=>l.lastDecision?.receipt).filter(Boolean),error:costLanes.some(l=>!!l.error),busy:costLanes.some(l=>['choosing','queued'].includes(l.status)),replay:view.mode==='replay',openAI:paid.length>0,tracked:costLanes.every(l=>l.policy?.kind==='externalDecisions')});
     const risk=$('decision-budget-risk');if(risk){risk.textContent='$1 monthly project limit. Billing enforcement can be delayed; charges may exceed that limit.';risk.hidden=!paid.some(i=>pairings[i]?.session.state.mode==='project-limit-browser'||pairings[i]?.session.state.admission?.mode==='project-limit-browser');}
     SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (!searching && ['nodeCap','timeMs'].includes(key)); });
+    ['left','right'].forEach((side,i)=>{const depth=$('c-'+side+'Depth');if(depth){depth.disabled=view.locked||selected[i]!=='lookahead';if(depth.parentNode)depth.parentNode.hidden=selected[i]!=='lookahead';}});
     $('c-reset').disabled=view.mode!=='replay'&&paid.some(i=>pairings[i]?.resetBlocked);
     const ended = view.mode === 'live' && view.sample >= view.config.samples && view.lanes.every(l => l.outcome);
     const pendingOpenAI=index=>view.mode!=='replay'&&paid.includes(index)&&pairings[index]?.session.state.state!=='connected';

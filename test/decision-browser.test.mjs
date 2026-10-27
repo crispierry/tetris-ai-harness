@@ -220,8 +220,8 @@ test('browser held recovery copy refers to authenticated provider status while s
  let entered,release;const waitForStart=new Promise(r=>entered=r),base=heuristic(),provider={...base,kind:'remote',requiresReset:true,runMetadata:{mode:'http-fixture'},decide:()=>new Promise(r=>{release=r;entered();})},strict=new Controller({provider});const pending=strict.step();await waitForStart;strict.pause();assert.match(strict.view.error,/Reset required/);release({});await pending;
 });
 
-for(const local of ['local','look1','look2','delay','error'])for(const side of [0,1])test(`${local} can oppose live-shaped OpenAI on either side (${side}) with canonical export and zero-call replay`,async t=>{
- let calls=0;const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})}),config={left:side===0?'openai':local,right:side===1?'openai':local,pieceCap:1,timeMs:1000},c=new Comparison({config,providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
+for(const local of ['local','look1','look2','lookahead','delay','error'])for(const side of [0,1])test(`${local} can oppose live-shaped OpenAI on either side (${side}) with canonical export and zero-call replay`,async t=>{
+ let calls=0;const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})}),config={left:side===0?'openai':local,right:side===1?'openai':local,leftDepth:6,rightDepth:6,pieceCap:1,timeMs:1000},c=new Comparison({config,providerFactory:(key,settings)=>key==='openai'?f.bridge:providerFor(key,settings)});
  try{
   await c.step();assert.equal(c.view.lanes[side].pieces,1);assert.equal(c.view.lanes[1-side].pieces,local==='error'?0:1);assert.equal(calls,1);
   const json=c.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);

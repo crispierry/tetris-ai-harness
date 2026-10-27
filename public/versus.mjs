@@ -71,7 +71,7 @@ export class HumanVersus {
   #policies() {
     return freeze([{ version: 'manual-focused-clock-1', kind: 'human', rulesVersion: RULES.version,
       timing: 'Real gravity in focused running play; independent of algorithm choosing; elapsed chunks at most250ms', pieceCap: this.#pieceCap },
-    this.#provider.kind==='remote'?this.#externalPolicy:{ version: this.#provider.version, kind: this.#provider.kind, rulesVersion: RULES.version,
+    this.#provider.kind==='remote'?this.#externalPolicy:this.#provider.runMetadata?.search?.version==='visible-beam-search-1'?providerPolicy(this.#provider):{ version: this.#provider.version, kind: this.#provider.kind, rulesVersion: RULES.version,
       assistance: 'canonical-afterstates-v1', weights: this.#provider.kind === 'local' && this.#provider.version === 'heuristic-2' ? HEURISTIC_WEIGHTS : null,
       paceMs: this.#paceMs, deadlineMs: VERSUS_LIMITS.deadlineMs, pieceCap: this.#pieceCap, live: false }]);
   }

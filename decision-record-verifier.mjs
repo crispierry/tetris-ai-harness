@@ -46,8 +46,9 @@ function policy(p){
   keys(p,['version','kind','policy'],'local policy');if(p.version!=='provider-policy-1')fail('local policy version');heuristicPolicy(p.policy);
  }else if(p?.kind==='localSearch'){
   keys(p,['version','kind','search'],'local search policy');if(p.version!=='provider-policy-1')fail('local search policy version');
-  const q=p.search;keys(q,['version','rulesVersion','featureVersion','objective','tier','depth','nodeCap','callCap','timeMs','maxOutputBytes','discount','evaluator','rootReward','terminalOrder','tieOrder','pruning','cache','cacheKeyDefinition','nodeUnit','reachabilityBounds','horizon','live','modelCalls','spendCapUSD'],'search policy');
-  if(q.version!=='visible-placement-search-2'||q.rulesVersion!==RULES.version||q.featureVersion!==VERSIONS.features||q.objective!==RULES.objective||![1,2].includes(q.depth)||q.tier!==`visible-depth-${q.depth}-full-occupancy-v1`||q.live!==false||q.modelCalls!==0||q.spendCapUSD!==0||q.cache!=='none'||q.pruning!=='none; every offered root and reachable child within caps')fail('local search contract');
+  const q=p.search,beam=q?.version==='visible-beam-search-1';keys(q,['version','rulesVersion','featureVersion','objective','tier','depth','nodeCap','callCap','timeMs','maxOutputBytes','discount','evaluator','rootReward','terminalOrder','tieOrder','pruning','cache','cacheKeyDefinition','nodeUnit','reachabilityBounds','horizon','live','modelCalls','spendCapUSD',...(beam?['beamWidth']:[])],'search policy');
+  if((!beam&&q.version!=='visible-placement-search-2')||q.rulesVersion!==RULES.version||q.featureVersion!==VERSIONS.features||q.objective!==RULES.objective||!(beam?[1,2,3,4,5,6]:[1,2]).includes(q.depth)||q.tier!==(beam?`visible-depth-${q.depth}-beam-${q.beamWidth}-v1`:`visible-depth-${q.depth}-full-occupancy-v1`)||q.live!==false||q.modelCalls!==0||q.spendCapUSD!==0||q.cache!=='none'||q.pruning!==(beam?'Global beam after each complete placement layer; retained branches only, not exhaustive search':'none; every offered root and reachable child within caps'))fail('local search contract');
+  if(beam){integer(q.beamWidth,1,16,'beam width');eq(q.horizon,'Current piece plus at most five visible next pieces; no unknown spawn is evaluated at the horizon','beam horizon');}
   integer(q.nodeCap,1,4000,'search node cap');integer(q.callCap,1,4000,'search call cap');integer(q.timeMs,1,5000,'search time cap');integer(q.maxOutputBytes,4096,4194304,'search output cap');if(typeof q.discount!=='number'||!Number.isFinite(q.discount)||q.discount<0||q.discount>1)fail('search discount');
   eq(q.reachabilityBounds,{poses:800,transitions:4000},'search reachability');
   keys(q.evaluator,['name','kind','version','policy'],'search evaluator');const e=q.evaluator;if(!['local','mock'].includes(e.kind)||typeof e.name!=='string'||!e.name||typeof e.version!=='string'||!e.version)fail('search evaluator identity');
@@ -77,8 +78,13 @@ function pilotReceipt(r,i,p){
 function searchReceipt(r,i,p,offered){
  keys(r,['requestId','errorCode','search','usage','actualCostUSD','provenance'],'search receipt');finiteJSON(r);
  if(size(r)>4096||r.requestId!==i.requestId||r.errorCode!==null||r.usage!==null||r.actualCostUSD!==null||r.provenance!=='Local/mock leaf evaluations; no live model calls')fail('search receipt binding');
- const q=r.search;keys(q,['nodes','evaluatorCalls','rootsOffered','rootsCompleted','childrenEnumerated','leavesEvaluated','pruned','elapsedMs'],'search stats');
+ const beam=p.search.version==='visible-beam-search-1',q=r.search;keys(q,['nodes','evaluatorCalls','rootsOffered','rootsCompleted','childrenEnumerated','leavesEvaluated','pruned','elapsedMs',...(beam?['depthRequested','depthReached','selectedDepth','beamWidth','expandedStates','earlyTerminal']:[])],'search stats');
  for(const [key,n]of Object.entries(q)){if(key==='elapsedMs'){if(!Number.isFinite(n)||n<0||n>60000)fail('search elapsed');}else integer(n,0,10000000,'search count');}
+ if(beam){
+  if(q.nodes>p.search.nodeCap||q.evaluatorCalls>p.search.callCap||q.rootsOffered!==offered||q.rootsCompleted!==offered||q.nodes!==offered+q.childrenEnumerated||q.evaluatorCalls!==q.nodes||q.leavesEvaluated!==q.nodes||q.beamWidth!==p.search.beamWidth||q.depthRequested!==p.search.depth||q.pruned>q.nodes+q.expandedStates)fail('beam search counts');
+  integer(q.depthReached,1,p.search.depth,'beam reached depth');integer(q.selectedDepth,1,q.depthReached,'beam selected depth');integer(q.earlyTerminal,0,1,'beam terminal');integer(q.expandedStates,0,q.beamWidth*(q.depthReached-1),'beam expansion bound');
+  if((q.depthReached<p.search.depth)!==(q.earlyTerminal===1)||(q.depthReached===1&&(q.expandedStates!==0||q.childrenEnumerated!==0))||(p.search.depth===1&&q.pruned!==0))fail('beam completed horizon');return;
+ }
  if(q.nodes>p.search.nodeCap||q.evaluatorCalls>p.search.callCap||q.rootsOffered!==offered||q.rootsCompleted!==q.rootsOffered||q.pruned!==0||
     q.nodes!==q.rootsOffered+q.childrenEnumerated||q.evaluatorCalls!==q.leavesEvaluated||q.leavesEvaluated<q.rootsOffered||q.leavesEvaluated>q.nodes||
     (p.search.depth===1&&(q.childrenEnumerated!==0||q.leavesEvaluated!==q.rootsOffered))||
