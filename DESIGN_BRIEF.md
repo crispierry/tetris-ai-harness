@@ -30,7 +30,7 @@ Canonical game tests must exercise the real rules (piece inventory, movement/col
 
 The computer-play extension must preserve these manual flows and show an explicit understandable control for enabling/disabling computer play. PM defines a bounded observable demonstration that the computer actually chooses and executes moves and makes game progress. No preselected performance benchmark or perfect-playing claim is supplied here.
 
-References: installed `/Users/cris/.codex/skills/tom-pm/references/design-language.md` and `role-contracts.md`. This brief is preparatory product/design input only; current authorization, supported runtime contracts, original budgets and independent readiness still govern launch.
+References: [board-first design](docs/BOARD-FIRST-DESIGN.md), [comparison](docs/COMPARISON-DESIGN.md), and [Marathon rules](docs/MARATHON.md). Historical handoff text records the original scope; the amendments below and current implementation describe the supported product.
 
 ## P8-024 Marathon brief v1 (supersedes earlier objective/status/cap wording)
 

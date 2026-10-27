@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-27",
+  "records": [
+    {
+      "file": "original-adapter-failure.json",
+      "sha256": "6f72f9461ca9e6edb64f74d316688b031610132509f3b90cf37d112d92e82def",
+      "bytes": 1170144
+    },
+    {
+      "file": "hole-priority-run.json",
+      "sha256": "852dea01a3eeba9ce6f1cc853d7b2baaa9853da535e3f417059564d027451f1d",
+      "bytes": 1656602
+    },
+    {
+      "file": "factual-run.json",
+      "sha256": "e746f2a957f74b402c2b35af1ff61d875b36bbcaae3dacf0b274ce536567ae88",
+      "bytes": 1814305
+    }
+  ],
+  "assurance": "Unmodified exported records. Canonical replay is conditional on recorded initial states and observed piece sequences; it does not authenticate providers, clocks, invoices or project-limit enforcement."
+}

@@ -57,6 +57,12 @@ export async function openDecisionStore({ directory, lineage, policy, enroll = f
     for (const [key,r] of Object.entries(state.requests)) if ((!['completed','rejected',...(ownerRecovery?['uncertain']:[])].includes(r.status)&&!validOwnerAbandonment(state,key,r,digest)) || !/^[a-f0-9]{64}$/.test(r.digest ?? '') || !state.runs[r.runId]) bad('damaged_store');
     for (const key of ['attempts','inputTokens','estimatedMicros']) if (!Number.isSafeInteger(state.used[key]) || state.used[key] < 0) bad('damaged_store');
     if(state.predecessor&&!validPredecessor(state))bad('damaged_store');
+    // A reload must never restore attempts that have already reached upstream.
+    // Predecessor debits cover older ledgers; this ledger's dispatches add to them.
+    if (['risk-accepted-project-browser-policy-1','risk-accepted-project-browser-policy-2'].includes(policy.kind)) {
+      const dispatched = Object.values(state.requests).filter(r => r.upstream === true).length;
+      if (state.used.attempts < (state.predecessor?.usedAttempts ?? 0) + dispatched) bad('damaged_store');
+    }
   } catch (e) { await lock.close(); await unlink(lockPath); throw e; }
   return Object.freeze({
     get sound() { return !broken && !closed; },

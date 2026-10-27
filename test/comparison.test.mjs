@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Comparison, validateConfig, DEFAULT_CONFIG, LIMITS } from '../public/comparison.mjs';
+import { Comparison, validateConfig, providerFor, DEFAULT_CONFIG, LIMITS } from '../public/comparison.mjs';
 import { heuristic } from '../public/controller.mjs';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn) { for (let n = 0; n < 300; n++) { if (fn()) return; await pause(10); } throw new Error('Comparison did not settle.'); }
 const plain = config => new Comparison({ config: {gravity:false, left: 'local', right: 'local', ...config } });
+
+test('provider factory rejects unknown keys rather than silently choosing another player', () => {
+  for (const key of ['banana', '__proto__', undefined, 'Lookahead']) assert.throws(() => providerFor(key, DEFAULT_CONFIG), /Unknown comparison player/);
+  for (const key of ['look1', 'look2']) assert.equal(typeof providerFor(key, DEFAULT_CONFIG).decide, 'function');
+});
 
 test('all settings reject over-cap, fractional, unavailable and unknown inputs before decisions', () => {
   assert.deepEqual(validateConfig(), DEFAULT_CONFIG); assert(Object.isFrozen(validateConfig()));

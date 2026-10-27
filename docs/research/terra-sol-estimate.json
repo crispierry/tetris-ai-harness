@@ -1,0 +1,43 @@
+{
+  "inputTokensMeasuredUsing": "gpt-6-luna Decisions receipt, not Terra tokenizer",
+  "measuredRequests": 331,
+  "meanInputTokens": 22696.75226586103,
+  "TerraInputMeanUSDUsingObservedCacheMix": 0.028078931268882175,
+  "pricingChecked": "2026-10-27",
+  "sources": [
+    "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+    "https://developers.openai.com/api/docs/pricing",
+    "https://developers.openai.com/api/docs/guides/reasoning"
+  ],
+  "scenarios": [
+    {
+      "requests": 50,
+      "assumedReasoningTokensPerRequest": 500,
+      "assumedVisibleTokensPerRequest": 20,
+      "TerraUSD": 1.5339465634441087,
+      "SolUSD": 3.0678931268882175
+    },
+    {
+      "requests": 50,
+      "assumedReasoningTokensPerRequest": 2000,
+      "assumedVisibleTokensPerRequest": 20,
+      "TerraUSD": 1.9089465634441087,
+      "SolUSD": 3.8178931268882175
+    },
+    {
+      "requests": 800,
+      "assumedReasoningTokensPerRequest": 500,
+      "assumedVisibleTokensPerRequest": 20,
+      "TerraUSD": 24.54314501510574,
+      "SolUSD": 49.08629003021148
+    },
+    {
+      "requests": 800,
+      "assumedReasoningTokensPerRequest": 2000,
+      "assumedVisibleTokensPerRequest": 20,
+      "TerraUSD": 30.54314501510574,
+      "SolUSD": 61.08629003021148
+    }
+  ],
+  "limitations": "Hypothetical Terra/Sol standard global short-context prices. No Terra/Sol request made. Cache mix/tokenizer and billable reasoning may differ. 800 decisions is a planning horizon, not a guarantee of 300 lines."
+}
