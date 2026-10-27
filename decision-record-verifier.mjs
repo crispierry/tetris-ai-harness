@@ -36,7 +36,7 @@ function heuristicPolicy(p){keys(p,['weights','terminalPenalty','completionRewar
 function policy(p){
  if(p?.kind!=='human'&&Object.hasOwn(p??{},'timing')){if(!isGravityTiming(p.timing))fail('gravity timing policy');const {timing,...base}=p;policy(base);return;}
  finiteJSON(p);if(size(p)>16384)fail('policy bytes');
- if(p?.version==='provider-policy-browser-1'){if(!validBrowserPolicy(p))fail('browser policy contract');}
+ if(['provider-policy-browser-1','provider-policy-browser-2'].includes(p?.version)){if(!validBrowserPolicy(p))fail('browser policy contract');}
  else if(p?.version==='provider-policy-pilot-1'){
   pilotPolicy(p);
  }else if(p?.kind==='externalDecisions'){
@@ -70,7 +70,7 @@ function pilotAccounting(a){
  if(a.mode!=='project-limit-pilot'||a.provider!=='OpenAI'||a.requestedModel!=='gpt-6-luna'||a.accountingMode!=='project-hard-limit-delay-risk'||!/^[a-f0-9]{64}$/.test(a.policyDigest)||a.reservedInputTokens!==null||a.estimatedReservationMicros!==null||a.actualExternalCalls!==null||a.actualCostUSD!==null||!['interrupted','terminal','closed'].every(k=>typeof a[k]==='boolean'))fail('pilot accounting contract');
  eq(a.spendControl,PILOT_SPEND,'pilot accounting spend');for(const k of ['attempts','completedResponses','placements','uncertain','remainingAttempts'])integer(a[k],0,3,'pilot accounting count');if(a.remainingAttempts!==3-a.attempts||a.completedResponses+a.uncertain>a.attempts||a.placements>a.completedResponses)fail('pilot accounting counts');integer(a.expiresAt,1,Number.MAX_SAFE_INTEGER,'pilot expiry');finiteJSON(a);
 }
-function accounting(a){if(a===null)return;if(['decision-browser-accounting-1','decision-browser-gravity-accounting-1','decision-browser-accounting-2','decision-browser-gravity-accounting-2'].includes(a?.version)){if(!validBrowserAccounting(a))fail('browser accounting contract');return;}if(Array.isArray(a)){if(a.length>2)fail('accounting lanes');a.forEach(accounting);return;}if(a.version==='decision-pilot-accounting-1'){pilotAccounting(a);return;}allow(a,ACCOUNT_FIELDS,'accounting');finiteJSON(a);if(a.limits)limits(a.limits);}
+function accounting(a){if(a===null)return;if(['decision-browser-accounting-1','decision-browser-gravity-accounting-1','decision-browser-accounting-2','decision-browser-gravity-accounting-2','decision-browser-accounting-3','decision-browser-gravity-accounting-3'].includes(a?.version)){if(!validBrowserAccounting(a))fail('browser accounting contract');return;}if(Array.isArray(a)){if(a.length>2)fail('accounting lanes');a.forEach(accounting);return;}if(a.version==='decision-pilot-accounting-1'){pilotAccounting(a);return;}allow(a,ACCOUNT_FIELDS,'accounting');finiteJSON(a);if(a.limits)limits(a.limits);}
 function pilotReceipt(r,i,p){
  keys(r,[...RECEIPT_FIELDS,'accountingMode'],'pilot receipt');finiteJSON(r);if(size(r)>4096||r.version!=='decision-pilot-receipt-1'||p.version!=='provider-policy-pilot-1'||r.provider!=='OpenAI'||r.requestedModel!==p.requestedModel||r.mode!==p.transport||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId||r.accountingMode!=='project-hard-limit-delay-risk'||r.actualCostUSD!==null||r.actualExternalCalls!==null||r.reservedInputTokens!==null||r.estimatedReservationMicros!==null||r.epoch!==0||r.attempts!==1||r.completedResponses!==1||r.completions!==1||r.placements!==1)fail('pilot receipt binding');
  keys(r.remainingAllowance,['attempts'],'pilot remaining allowance');integer(r.remainingAllowance.attempts,0,2,'pilot remaining attempts');if(!Number.isFinite(r.requestLatencyMs)||r.requestLatencyMs<0||r.requestLatencyMs>1500)fail('pilot latency');
@@ -94,7 +94,7 @@ function searchReceipt(r,i,p,offered){
 }
 function receipt(r,i,p,offered){
  if(p.kind==='localSearch'){searchReceipt(r,i,p,offered);return;}
- if(p.version==='provider-policy-browser-1'){if(!validBrowserReceipt(r)||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId)fail('browser receipt binding');if(r.version==='decision-browser-forced-receipt-1'&&(offered!==1||r.placements!==(isGravityTiming(p.timing)?0:1)))fail('forced placement requires exactly one legal candidate');return;}
+ if(['provider-policy-browser-1','provider-policy-browser-2'].includes(p.version)){if(!validBrowserReceipt(r)||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId)fail('browser receipt binding');if(r.version==='decision-browser-forced-receipt-1'&&(offered!==1||r.placements!==(isGravityTiming(p.timing)?0:1)))fail('forced placement requires exactly one legal candidate');return;}
  if(p.version==='provider-policy-pilot-1'){pilotReceipt(r,i,p);return;}
  if(r===null){if(p.kind==='externalDecisions')fail('missing compact receipt');return;}
  keys(r,RECEIPT_FIELDS,'receipt');finiteJSON(r);if(size(r)>4096||r.version!=='decision-receipt-2'||r.provider!=='OpenAI'||r.requestedModel!==p.requestedModel||r.mode!==p.transport||r.policyDigest!==p.policyDigest||r.requestId!==i.requestId||r.stateRevision!==i.revision||r.selectedCandidateId!==i.selectedCandidateId)fail('receipt binding');
@@ -141,7 +141,7 @@ export function verifyDecisionUIRecord(input){
    if(!Number.isFinite(i.latencyMs)||i.latencyMs<0||i.latencyMs>60000||!['placed','paused','stopped','cancel','error'].includes(i.outcome)||typeof i.recoveryRequired!=='boolean'||(i.recoveryRequired&&l.policy.kind!=='externalDecisions'))fail('gravity disposition');
    if(i.proof?.version!==gravityProofVersion(l.policy.timing))fail('gravity proof timing');
    const turn=replayGravityProof(s,{sessionId:before.sessionId,revision:rev},i.proof,{selectedCandidateId:i.selectedCandidateId});
-   if(i.selectedCandidateId!==null){receipt(i.receipt,i,l.policy,turn.offered.length);if(l.policy.version==='provider-policy-browser-1'&&!['decision-browser-gravity-receipt-1','decision-browser-forced-receipt-1'].includes(i.receipt.version))fail('gravity receipt timing');}
+   if(i.selectedCandidateId!==null){receipt(i.receipt,i,l.policy,turn.offered.length);if(['provider-policy-browser-1','provider-policy-browser-2'].includes(l.policy.version)&&!['decision-browser-gravity-receipt-1','decision-browser-forced-receipt-1'].includes(i.receipt.version))fail('gravity receipt timing');}
    else if(i.receipt!==null||!['cancel','error'].includes(i.outcome))fail('gravity missing choice');
    if(turn.proof.placementLimit>r.pieceCap-pieces)fail('gravity placement bound');
    if(i.outcome==='placed'&&!turn.locked)fail('gravity placement not locked');s=turn.state;rev++;pieces+=turn.locks;

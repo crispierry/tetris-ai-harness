@@ -34,7 +34,7 @@ export async function reconcileAbandonedBrowserRequest({config,expectedLedgerSHA
 }
 export async function prepareBrowserSuccessor({previousConfig,nextConfig}={}){
  const a=previousConfig?.qualification?.projectEvidence,b=nextConfig?.qualification?.projectEvidence;
- if(!qualifiedDecisionBrowser(nextConfig?.qualification,nextConfig?.policy)||!a||digest(previousConfig.qualification)!==previousConfig.policy.qualificationDigest||a.projectId!==b.projectId||a.keyFingerprint!==b.keyFingerprint||b.thresholdAmountCents!==100||b.currency!=='USD'||b.interval!=='month'||previousConfig.directory===nextConfig.directory||previousConfig.lineage===nextConfig.lineage)fail('successor_configuration');
+ if(!qualifiedDecisionBrowser(nextConfig?.qualification,nextConfig?.policy)||!a||digest(previousConfig.qualification)!==previousConfig.policy.qualificationDigest||a.projectId!==b.projectId||a.keyFingerprint!==b.keyFingerprint||(![100,500].includes(b.thresholdAmountCents)||b.thresholdAmountCents!==a.thresholdAmountCents)||b.currency!=='USD'||b.interval!=='month'||previousConfig.directory===nextConfig.directory||previousConfig.lineage===nextConfig.lineage)fail('successor_configuration');
  const old=await openDecisionStore(previousConfig);let next;
  try{
   const before=await old.inspect(),events=Object.values(before.ownerReconciliations??{}),event=events.at(-1);

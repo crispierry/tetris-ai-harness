@@ -33,7 +33,7 @@ import {mountVersus} from '../public/versus-ui.mjs';
 import {providerPolicy} from '../public/provider-policy.mjs';
 import {providerProvenance} from '../public/provider-provenance.mjs';
 import {browserStatus,connectionSummary} from '../public/decision-session.mjs';
-import {BROWSER_BUDGET_LINE,validBrowserAccounting} from '../public/browser-risk-contract.mjs';
+import {BROWSER_BUDGET_LINE,validBrowserAccounting,browserBudgetLine,validBrowserPolicy,browserPublicPolicy} from '../public/browser-risk-contract.mjs';
 import {verifyDecisionUIRecord} from '../decision-record-verifier.mjs';
 const dummy='dummy_browser_key_for_offline_tests_only',fingerprint=createHash('sha256').update(dummy).digest('hex');
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -42,6 +42,16 @@ function config(now=Date.now()){
  const policy={kind:'risk-accepted-project-browser-policy-1',qualificationDigest:digest(qualification),maxAttempts:1000,maxRuns:64,maxEpochs:100,maxPlacements:1000,maxConcurrentUpstream:1,timeoutMs:1500,expiresAt:now+3600000,retryLimit:0,fallback:'none'};return {qualification,policy};
 }
 async function directory(t){const root=await mkdtemp(path.join(await realpath(os.tmpdir()),'browser-risk-dummy-'));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));return root;}
+test('owner-qualified $5 budget is authenticated, rendered and replayed without changing the $1 archive contract',async t=>{
+ const configuration=config();configuration.qualification.projectEvidence.thresholdAmountCents=500;configuration.policy.qualificationDigest=digest(configuration.qualification);assert(qualifiedDecisionBrowser(configuration.qualification,configuration.policy));
+ const f=await fixture(t,{configuration}),initial=await f.bridge.status();assert.equal(initial.version,'decision-browser-accounting-3');assert.equal(initial.spendControl.configuredProjectLimitUSD,5);assert(validBrowserAccounting(initial));assert.match(browserBudgetLine(initial.spendControl),/^\$5 monthly/);
+ let journal;const c=new Controller({sessionId:'browser',provider:f.bridge,onTransition:({input,view})=>journal.append(0,input,view)});journal=new DecisionJournal({mode:'solo'});const policy=providerPolicy(f.bridge);assert.equal(policy.version,'provider-policy-browser-2');journal.addLane(0,'computer',c.view,policy);await c.step();assert.equal(c.view.pieces,1);const accounting=await f.bridge.status();assert.equal(accounting.attempts,1);assert.equal(accounting.remainingAttempts,999);assert(verifyDecisionUIRecord(journal.exportRun({metadata:{accounting}})).ok);
+ const forgedOld={...policy,version:'provider-policy-browser-1'};assert.equal(validBrowserPolicy(forgedOld),false);const forgedAccounting={...accounting,version:'decision-browser-accounting-2'};assert.equal(validBrowserAccounting(forgedAccounting),false);assert.equal(browserPublicPolicy(accounting).spendControl.configuredProjectLimitUSD,5);
+});
+test('$5 gravity accounting and receipts preserve canonical replay and independent request limits',async t=>{
+ const configuration=config();configuration.qualification.projectEvidence.thresholdAmountCents=500;configuration.policy.qualificationDigest=digest(configuration.qualification);const f=await fixture(t,{configuration,httpServer:true});let journal;
+ const c=new GravityController({sessionId:'browser',provider:f.bridge,onTransition:({input,view})=>journal.append(0,input,view)});journal=new DecisionJournal({mode:'solo'});journal.addLane(0,'computer',c.view,gravityPolicy(providerPolicy(f.bridge)));await c.step();assert.equal(c.view.pieces,1);assert.equal(c.view.error,null);const accounting=await f.bridge.status();assert.equal(accounting.version,'decision-browser-gravity-accounting-3');assert(validBrowserAccounting(accounting));assert.equal(accounting.spendControl.configuredProjectLimitUSD,5);assert.equal(accounting.attempts,1);assert.equal(accounting.remainingAttempts,999);assert(verifyDecisionUIRecord(journal.exportRun({metadata:{accounting}})).ok);
+});
 function upstream({status=200,usage={input_tokens:100,output_tokens:0,total_tokens:100},hold,inspect,refusal=false,errorCode='insufficient_quota'}={}){return async(url,options)=>{inspect?.(url,options);if(hold)await hold();const body=JSON.parse(options.body),ids=body.questions[0].choices.map(x=>x.value);return new Response(JSON.stringify(status===429?{error:{code:errorCode}}:{model:'gpt-6-luna',answers:[refusal?{name:'placement',type:'refusal'}:{name:'placement',type:'choice',choice:ids[0],confidence:1,probabilities:ids.map((value,n)=>({value,probability:n?0:1}))}],usage}),{status});};}
 async function fixture(t,{fetchImpl=upstream(),configuration=config(),httpServer=false}={}){
  const root=await directory(t),store=await openDecisionStore({directory:path.join(root,'ledger'),lineage:'dummy-browser',policy:configuration.policy,enroll:true}),service=await createDecisionBrowserService({store,...configuration,credential:dummy,fetchImpl});
