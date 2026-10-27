@@ -1,15 +1,117 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Computer play · Tetris</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/harness.css"><link rel="stylesheet" href="/modes.css"><script type="module" src="/harness-ui.mjs"></script></head>
-<body><div class="hshell"><header class="page-header"><div><p class="eyebrow">LOCAL ARCADE</p><h1>Computer play</h1></div><a href="/">Play manually</a></header>
-<nav class="mode-nav" aria-label="Play modes"><a href="/">Solo play</a><a href="/harness.html" aria-current="page">Solo computer</a><a href="/comparison.html">Algorithm comparison</a><a href="/versus.html">Human vs algorithm</a></nav>
-<p class="hint">Inspect legal moves with local players, offline mocks, or OpenAI Decisions.</p>
-<main class="h-layout"><section class="h-play card" aria-labelledby="player-heading"><div class="board-header"><h2 id="player-heading">Local heuristic</h2><span id="h-status" class="status">Ready</span></div>
-<div id="h-board" class="h-board" role="img" aria-label="Empty Tetris board"></div>
-<p id="decision-budget-risk" class="note" hidden></p><div class="h-actions"><button id="h-start" class="button button-primary">Start</button><button id="h-pause" class="button button-secondary" disabled>Pause</button><button id="h-step" class="button button-secondary">Step one piece</button><button id="h-stop" class="button button-secondary" disabled>Stop</button><button id="h-replay" class="button button-secondary">Replay saved frames</button><button id="h-export" class="button button-secondary">Export run</button><button id="h-reset" class="button button-secondary">Reset</button></div>
-<p id="h-outcome" class="hint"></p><p id="h-error" class="error" role="alert" hidden></p><p class="hint">Each step chooses and locks one piece, then pauses. Stop keeps the board; Start continues it. Reset begins the same deterministic sequence.</p></section>
-<div class="h-sidebar"><section class="card"><h2>Progress</h2><dl class="h-metrics"><div><dt>Score</dt><dd id="h-score">0</dd></div><div><dt>Lines</dt><dd id="h-lines">0</dd></div><div><dt>Level</dt><dd id="h-level">1 / 30</dd></div><div><dt>Pieces</dt><dd id="h-pieces">0</dd></div></dl><p class="hint">Marathon: clear 300 lines. Start at level 1; every 10 lines raises the level, up to level 30.</p></section>
-<section class="card"><h2>Up next</h2><div id="h-next" class="h-next" aria-label="Next five pieces"></div></section>
-<section class="card"><p id="h-provenance" class="hint">Provider provenance unknown</p><label for="h-provider">Computer player</label><select id="h-provider"><option value="local">Local heuristic</option><option value="delay">Delayed mock</option><option value="error">Error mock</option><option value="openai">OpenAI Decisions</option></select><p class="hint">The delayed and error players exercise waiting and recovery without a model service.</p></section>
-<section class="card"><div id="decision-pairing"></div></section><section class="card"><h2>Last placement</h2><p id="h-choice">No piece selected yet.</p><details><summary>Placement and board facts</summary><pre id="h-details">Run or step to inspect a choice.</pre></details></section>
-<details class="card"><summary>Rules and worked examples</summary><div id="h-rules"></div></details></div></main>
-<p id="h-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p></div></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Solo computer · Tetris</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/harness.css">
+<link rel="stylesheet" href="/arcade.css">
+<script type="module" src="/arcade-layout.mjs"></script>
+<script type="module" src="/harness-ui.mjs">
+</script>
+</head>
+<body>
+<div class="arcade-shell">
+<header class="arcade-header">
+<h1>Tetris</h1>
+<span>300 lines</span>
+</header>
+<nav class="mode-nav" aria-label="Play modes">
+<a href="/">Solo play</a>
+<a href="/harness.html" aria-current="page">Solo computer</a>
+<a href="/comparison.html">Compare</a>
+<a href="/versus.html">Human vs computer</a>
+</nav>
+<main class="arcade-stage">
+<section class="lane">
+<div class="lane-heading">
+<h2 id="player-heading">Local heuristic</h2>
+<span id="h-status" class="status">Ready</span>
+</div>
+<div id="h-board" class="h-board" role="img" aria-label="Empty Tetris board">
+</div>
+<dl class="lane-metrics">
+<div>
+<dt>Score</dt>
+<dd id="h-score">0</dd>
+</div>
+<div>
+<dt>Lines</dt>
+<dd id="h-lines">0 / 300</dd>
+</div>
+<div>
+<dt>Level</dt>
+<dd id="h-level">1 / 30</dd>
+</div>
+<div>
+<dt>Pieces</dt>
+<dd id="h-pieces">0</dd>
+</div>
+</dl>
+<h3>Next</h3>
+<div id="h-next" class="h-next" aria-label="Next five pieces">
+</div>
+<p id="h-outcome" class="lane-outcome note">
+</p>
+<p id="h-error" class="error" role="alert" hidden>
+</p>
+</section>
+<section class="solo-utility">
+<details>
+<summary>Placement details</summary>
+<p id="h-choice">No piece selected yet.</p>
+<pre id="h-details">
+</pre>
+</details>
+</section>
+<aside class="control-rail" aria-label="Computer controls">
+<label for="h-provider">Player</label>
+<select id="h-provider">
+<option value="local">Local heuristic</option>
+<option value="openai">OpenAI Decisions</option>
+<option value="delay">Delayed mock</option>
+<option value="error">Error mock</option>
+</select>
+<div class="play-toolbar">
+<p id="decision-cost" class="test-cost" hidden>
+</p>
+<p id="decision-cost-note" class="note" hidden>
+</p>
+<p id="decision-budget-risk" class="budget-risk" hidden>
+</p>
+<div class="primary-actions">
+<button id="h-start" class="button button-primary">Start</button>
+<button id="h-pause" class="button button-secondary" disabled>Pause</button>
+<button id="h-step" class="button button-secondary" aria-label="Step one piece">Step</button>
+<button id="h-stop" class="button button-secondary" disabled>Stop</button>
+</div>
+<button id="h-reset" class="button button-quiet">Reset</button>
+</div>
+<div id="decision-pairing">
+</div>
+<details>
+<summary>Run details</summary>
+<div class="archive-actions">
+<button id="h-replay" class="button button-secondary" disabled>Replay</button>
+<button id="h-export" class="button button-secondary" disabled>Export run</button>
+</div>
+<p class="note">Replay uses saved frames without new decisions. Reset clears this recording and repeats the sequence; it does not refill OpenAI allowance. Canonical verification is separate.</p>
+<p id="h-provenance" class="note">
+</p>
+</details>
+<details>
+<summary>How this works</summary>
+<p class="note">Step places one piece, then pauses. Clear 300 lines to finish. Local players and mocks make no OpenAI requests.</p>
+<div id="h-rules">
+</div>
+</details>
+</aside>
+</main>
+<p id="h-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+</p>
+<noscript>JavaScript is required to play.</noscript>
+</div>
+</body>
+</html>

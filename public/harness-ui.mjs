@@ -1,3 +1,5 @@
+import {mountTestCost} from './test-cost.mjs';
+import {compactPlayerName,visibleOutcome} from './arcade-copy.mjs';
 import {createPlacementPresenter,placementEvent} from './placement-motion.mjs';
 import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
@@ -9,6 +11,7 @@ import { Controller, heuristic, mockProvider } from './controller.mjs';
 import { briefing } from './briefing.mjs';
 import { MARATHON_COPY, linesProgress, levelProgress, outcomeDetail } from './marathon.mjs';
 export function mountHarness(doc,{window:win=globalThis,onExport=null}={}) {
+const updateCost=mountTestCost(doc);
 const $ = id => doc.getElementById(id), format = new Intl.NumberFormat().format;
 const STATUS = { placing:'Placing…',ready: 'Ready', running: 'Running', choosing: 'Choosing…', paused: 'Paused', stopped: 'Stopped', over: 'Game over', won: MARATHON_COPY.complete, error: 'Error' };
 const board = $('h-board'), tiles = Array.from({length:RULES.width*RULES.height},()=>{const tile=doc.createElement('span');tile.className='h-cell';tile.setAttribute('aria-hidden','true');board.append(tile);return tile;});
@@ -24,6 +27,7 @@ let auto = false, loopToken = 0, timer = null, previousStatus = 'ready';
 function announce(text) { $('h-announcement').textContent=text; }
 function render(view) {
  if(disposed)return;
+ updateCost({gameId:view.observation.sessionId,receipt:view.lastDecision?.receipt,error:!!view.error,busy:view.busy,replay,openAI:$('h-provider').value==='openai',tracked:policy?.kind==='externalDecisions'});
  $('h-reset').disabled=!replay&&!!pairing?.resetBlocked;
  if(replay&&replayFrame)view=replayFrame;
  if(!replay)pairing?.observe(view.lastDecision?.receipt);
@@ -36,8 +40,8 @@ function render(view) {
   tiles[y*RULES.width+x].className=`h-cell${type?` filled piece-${type}`:''}${falling?' active':''}`;
  }
  board.setAttribute('aria-label',`${RULES.width} columns by ${RULES.height} rows. ${obs.board.flat().filter(Boolean).length} locked cells. ${obs.active?`Falling ${obs.active.type} piece.`:'No falling piece.'}`);
- $('h-status').textContent=replay?'Saved visual replay':view.pieces>=1000&&obs.status!=='won'?'Capped':STATUS[view.status];$('player-heading').textContent=!replay&&!!pairing&&$('h-provider').value==='openai'&&pairing.session.state.state!=='connected'?'OpenAI Decisions · Connect to request approval':view.player.name;
- for(const key of ['score','lines','level'])$('h-'+key).textContent=format(obs[key]);$('h-pieces').textContent=format(view.pieces);$('h-lines').textContent=linesProgress(obs.lines);$('h-level').textContent=levelProgress(obs.level);$('h-outcome').textContent=outcomeDetail(view.status,obs,view.error);
+ $('h-status').textContent=replay?'Saved visual replay':view.pieces>=1000&&obs.status!=='won'?'Capped':STATUS[view.status];$('player-heading').textContent=!replay&&!!pairing&&$('h-provider').value==='openai'&&pairing.session.state.state!=='connected'?'OpenAI Decisions':compactPlayerName(view.player.name);
+ for(const key of ['score','lines','level'])$('h-'+key).textContent=format(obs[key]);$('h-pieces').textContent=format(view.pieces);$('h-lines').textContent=linesProgress(obs.lines);$('h-level').textContent=levelProgress(obs.level);$('h-outcome').textContent=visibleOutcome(view.status,obs,view.error);
  $('h-next').replaceChildren();obs.next.forEach((type,index)=>{
   const mini=doc.createElement('div');mini.className=`h-mini piece-${type}`;mini.setAttribute('role','img');mini.setAttribute('aria-label',`Next ${index+1}: ${type}`);
   const occupied=new Set(GEOMETRY.find(g=>g.type===type).orientations[0].cells.map(p=>`${p.x},${p.y}`));

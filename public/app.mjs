@@ -12,7 +12,7 @@ const COPY = {
   newGame: 'New game', score: 'Score', lines: 'Lines', level: 'Level', next: 'Up next',
   controls: 'Keyboard controls', move: 'Move', softDrop: 'Soft drop', rotate: 'Rotate clockwise',
   hardDrop: 'Hard drop', pauseResume: 'Pause / resume', or: 'or', space: 'Space',
-  focusHelp: 'Click the board to focus. Leaving the game pauses play.',
+  focusHelp: 'Leaving the board pauses play.',
   helpNote: 'Desktop keyboard play. Clear full rows to reach the 300-line target.',
   status: { ready: 'Ready', playing: 'Playing', paused: 'Paused', over: 'Game over', won: MARATHON_COPY.complete },
   overlay: {

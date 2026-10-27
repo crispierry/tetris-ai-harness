@@ -1,33 +1,195 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>Compare computer players · Tetris</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/comparison.css"><link rel="stylesheet" href="/modes.css"><script type="module" src="/comparison-ui.mjs"></script></head>
-<body><p class="hint">Marathon: clear 300 lines. Start at level 1; every 10 lines raises the level, up to level 30.</p><main class="comparison-shell">
-<header class="page-header"><div><p class="eyebrow">LOCAL ARCADE</p><h1>Compare computer players</h1></div><nav aria-label="Other games"><a href="/">Play manually</a> · <a href="/harness.html">Solo computer play</a></nav></header>
-<nav class="mode-nav" aria-label="Play modes"><a href="/">Solo play</a><a href="/harness.html">Solo computer</a><a href="/comparison.html" aria-current="page">Algorithm comparison</a><a href="/versus.html">Human vs algorithm</a></nav>
-<p class="intro-copy">Choose local players or Local heuristic left versus OpenAI Decisions right (one sample). Mocks are offline test fixtures. Lookahead compares algorithm assistance; it does not measure model quality.</p>
-<section class="card setup" aria-label="Comparison setup">
-<div class="player-settings"><label>Left player<select id="c-left"><option value="local">Local heuristic</option><option value="look1">Lookahead depth 1</option><option value="look2">Lookahead depth 2</option><option value="delay">Delayed mock</option><option value="error">Error mock</option><option disabled>Astra — Unavailable: live connection not configured</option><option disabled>Decisions — Unavailable: live connection not configured</option><option disabled>Jev — Unavailable: live connection not configured</option></select></label>
-<label>Right player<select id="c-right"><option value="local">Local heuristic</option><option value="look1" selected>Lookahead depth 1</option><option value="look2">Lookahead depth 2</option><option value="delay">Delayed mock</option><option value="error">Error mock</option><option disabled>Astra — Unavailable: live connection not configured</option><option value="openai">OpenAI Decisions</option><option disabled>Jev — Unavailable: live connection not configured</option></select></label></div>
-<details><summary>Advanced run settings</summary><div class="advanced-settings">
-<label>Paired samples (1–8)<input id="c-samples" type="number" min="1" max="8" value="1"></label>
-<label>Placement safety limit (1–1000)<input id="c-pieceCap" type="number" min="1" max="1000" value="1000"></label>
-<label>Playback pace in ms (30–1000)<input id="c-paceMs" type="number" min="30" max="1000" value="150"></label>
-<label>Search nodes (1–4000)<input id="c-nodeCap" type="number" min="1" max="4000" value="4000"></label>
-<label>Search time in ms (1–1000)<input id="c-timeMs" type="number" min="1" max="1000" value="500"></label>
-</div><p class="note">One decision per lane at a time; fixed 1500 ms decision deadline. Settings lock until Reset. Each paired sample uses the same private sequence in independent games. Playback pace is separate from measured local decision overhead; game time freezes while choosing. Search policy: visible-placement-search-2 with local-leaf-value-2, no pruning or live evaluation.</p></details>
-<p id="decision-budget-risk" class="note" hidden></p><div class="comparison-actions" aria-label="Shared comparison controls"><button id="c-start" class="button button-primary">Start</button><button id="c-pause" class="button button-secondary" disabled>Pause</button><button id="c-step" class="button button-secondary">Step one piece</button><button id="c-stop" class="button button-secondary" disabled>Stop</button><button id="c-reset" class="button button-secondary">Reset</button><button id="c-replay" class="button button-secondary" disabled>Replay</button><button id="c-export" class="button button-secondary" disabled>Export run</button></div>
-<p class="note">Step places one piece in each eligible lane, then pauses. Stop retains boards; Start continues. Reset repeats the sequence. Replay reads saved frames without making decisions; Reset returns to a fresh run.</p>
-<p id="c-error" class="comparison-error" role="alert" hidden></p><p id="c-progress" class="run-progress">Ready · Sample 1 of 1</p>
-<div id="decision-pairing"></div></section>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Compare · Tetris</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/comparison.css">
+<link rel="stylesheet" href="/arcade.css">
+<script type="module" src="/arcade-layout.mjs"></script>
+<script type="module" src="/comparison-ui.mjs">
+</script>
+</head>
+<body>
+<div class="arcade-shell">
+<header class="arcade-header">
+<h1>Tetris</h1>
+<span>300 lines</span>
+</header>
+<nav class="mode-nav" aria-label="Play modes">
+<a href="/">Solo play</a>
+<a href="/harness.html">Solo computer</a>
+<a href="/comparison.html" aria-current="page">Compare</a>
+<a href="/versus.html">Human vs computer</a>
+</nav>
+<main class="arcade-stage paired-stage">
 <div class="comparison-lanes">
-<section class="card lane" aria-labelledby="c-0-heading"><div class="lane-heading"><h2 id="c-0-heading">Left · Local heuristic</h2><span id="c-0-status" class="lane-status">Ready</span></div><p id="c-0-tier" class="note"></p>
-<div class="lane-content"><div id="c-0-board" class="comparison-board" role="img" aria-label="Left empty Tetris board"></div><div class="lane-facts"><dl class="lane-metrics"><div><dt>Score</dt><dd id="c-0-score">0</dd></div><div><dt>Lines</dt><dd id="c-0-lines">0</dd></div><div><dt>Level</dt><dd id="c-0-level">1 / 30</dd></div><div><dt>Pieces</dt><dd id="c-0-pieces">0</dd></div></dl><h3>Next five</h3><div id="c-0-next" class="comparison-next"></div><p id="c-0-outcome" class="note">Marathon: clear 300 lines. Level 1 to 30.</p><p id="c-0-error" class="comparison-error" hidden></p></div></div>
-<p id="c-0-choice" class="note">No piece selected yet.</p><details><summary>Placement and search facts</summary><pre id="c-0-details">Step or start to inspect a choice.</pre></details></section>
-<section class="card lane" aria-labelledby="c-1-heading"><div class="lane-heading"><h2 id="c-1-heading">Right · Lookahead depth 1</h2><span id="c-1-status" class="lane-status">Ready</span></div><p id="c-1-tier" class="note"></p>
-<div class="lane-content"><div id="c-1-board" class="comparison-board" role="img" aria-label="Right empty Tetris board"></div><div class="lane-facts"><dl class="lane-metrics"><div><dt>Score</dt><dd id="c-1-score">0</dd></div><div><dt>Lines</dt><dd id="c-1-lines">0</dd></div><div><dt>Level</dt><dd id="c-1-level">1 / 30</dd></div><div><dt>Pieces</dt><dd id="c-1-pieces">0</dd></div></dl><h3>Next five</h3><div id="c-1-next" class="comparison-next"></div><p id="c-1-outcome" class="note">Marathon: clear 300 lines. Level 1 to 30.</p><p id="c-1-error" class="comparison-error" hidden></p></div></div>
-<p id="c-1-choice" class="note">No piece selected yet.</p><details><summary>Placement and search facts</summary><pre id="c-1-details">Step or start to inspect a choice.</pre></details></section>
+<section class="lane" aria-labelledby="c-0-heading">
+<div class="lane-heading">
+<h2 id="c-0-heading">Local heuristic</h2>
+<span id="c-0-status" class="lane-status">Ready</span>
 </div>
-<section class="card comparison-results"><h2>Descriptive paired results</h2><p id="c-results">No completed pairs.</p><p class="note">Capped and error runs are censored. Differences describe these saved samples only; no winner, improvement or provider-quality claim is made. Cost is not measured. Saved visual replay is distinct from canonical Node verification.</p><details><summary>Per-pair outcomes and differences</summary><pre id="c-pairs">No completed pairs.</pre></details></section>
-<details class="card rules"><summary>Rules and worked examples</summary><div id="c-rules"></div></details>
-<p id="c-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-<noscript>JavaScript is required for this local comparison.</noscript>
-</main></body></html>
+<div id="c-0-board" class="comparison-board" role="img" aria-label="Empty Tetris board">
+</div>
+<dl class="lane-metrics">
+<div>
+<dt>Score</dt>
+<dd id="c-0-score">0</dd>
+</div>
+<div>
+<dt>Lines</dt>
+<dd id="c-0-lines">0 / 300</dd>
+</div>
+<div>
+<dt>Level</dt>
+<dd id="c-0-level">1 / 30</dd>
+</div>
+<div>
+<dt>Pieces</dt>
+<dd id="c-0-pieces">0</dd>
+</div>
+</dl>
+<h3>Next</h3>
+<div id="c-0-next" class="comparison-next">
+</div>
+<p id="c-0-outcome" class="lane-outcome note">
+</p>
+<p id="c-0-error" class="comparison-error" role="alert" hidden>
+</p>
+</section>
+<section class="lane" aria-labelledby="c-1-heading">
+<div class="lane-heading">
+<h2 id="c-1-heading">Lookahead depth 1</h2>
+<span id="c-1-status" class="lane-status">Ready</span>
+</div>
+<div id="c-1-board" class="comparison-board" role="img" aria-label="Empty Tetris board">
+</div>
+<dl class="lane-metrics">
+<div>
+<dt>Score</dt>
+<dd id="c-1-score">0</dd>
+</div>
+<div>
+<dt>Lines</dt>
+<dd id="c-1-lines">0 / 300</dd>
+</div>
+<div>
+<dt>Level</dt>
+<dd id="c-1-level">1 / 30</dd>
+</div>
+<div>
+<dt>Pieces</dt>
+<dd id="c-1-pieces">0</dd>
+</div>
+</dl>
+<h3>Next</h3>
+<div id="c-1-next" class="comparison-next">
+</div>
+<p id="c-1-outcome" class="lane-outcome note">
+</p>
+<p id="c-1-error" class="comparison-error" role="alert" hidden>
+</p>
+</section>
+</div>
+<aside class="control-rail" aria-label="Comparison setup">
+<div class="player-settings">
+<label for="c-left">Left player</label>
+<select id="c-left">
+<option value="local">Local heuristic</option>
+<option value="look1">Lookahead depth 1</option>
+<option value="look2">Lookahead depth 2</option>
+<option value="delay">Delayed mock</option>
+<option value="error">Error mock</option>
+</select>
+<label for="c-right">Right player</label>
+<select id="c-right">
+<option value="local">Local heuristic</option>
+<option value="look1" selected>Lookahead depth 1</option>
+<option value="look2">Lookahead depth 2</option>
+<option value="openai">OpenAI Decisions</option>
+<option value="delay">Delayed mock</option>
+<option value="error">Error mock</option>
+</select>
+</div>
+<div class="play-toolbar">
+<p id="decision-cost" class="test-cost" hidden>
+</p>
+<p id="decision-cost-note" class="note" hidden>
+</p>
+<p id="decision-budget-risk" class="budget-risk" hidden>
+</p>
+<div class="primary-actions">
+<button id="c-start" class="button button-primary">Start</button>
+<button id="c-pause" class="button button-secondary" disabled>Pause</button>
+<button id="c-step" class="button button-secondary" aria-label="Step one piece">Step</button>
+<button id="c-stop" class="button button-secondary" disabled>Stop</button>
+</div>
+<button id="c-reset" class="button button-quiet">Reset</button>
+</div>
+<p id="c-progress" class="run-progress">Ready</p>
+<p id="c-error" class="comparison-error" role="alert" hidden>
+</p>
+<div id="decision-pairing">
+</div>
+<details>
+<summary>Run details</summary>
+<div class="archive-actions">
+<button id="c-replay" class="button button-secondary" disabled>Replay</button>
+<button id="c-export" class="button button-secondary" disabled>Export run</button>
+</div>
+<p class="note">Replay uses saved frames without new decisions. Reset clears this recording and repeats the sequence; it does not refill OpenAI allowance. Canonical verification is separate.</p>
+<details>
+<summary>Run settings</summary>
+<div class="advanced-settings">
+<label>Paired samples<input id="c-samples" type="number" min="1" max="8" value="1">
+</label>
+<label>Placement safety limit<input id="c-pieceCap" type="number" min="1" max="1000" value="1000">
+</label>
+<label>Playback pace in ms<input id="c-paceMs" type="number" min="30" max="1000" value="150">
+</label>
+<label>Search nodes<input id="c-nodeCap" type="number" min="1" max="4000" value="4000">
+</label>
+<label>Search time in ms<input id="c-timeMs" type="number" min="1" max="1000" value="500">
+</label>
+</div>
+</details>
+<p class="note">Same piece sequence. Independent games. Results describe these samples only; they do not establish a winner or model quality. The decision deadline is 1500 ms. Capped/error runs are censored.</p>
+<p id="c-results">
+</p>
+<pre id="c-pairs">
+</pre>
+<details>
+<summary>Left placement details</summary>
+<p id="c-0-tier" class="note">
+</p>
+<p id="c-0-choice" class="note">
+</p>
+<pre id="c-0-details">
+</pre>
+</details>
+<details>
+<summary>Right placement details</summary>
+<p id="c-1-tier" class="note">
+</p>
+<p id="c-1-choice" class="note">
+</p>
+<pre id="c-1-details">
+</pre>
+</details>
+</details>
+<details>
+<summary>How this works</summary>
+<p class="note">Clear 300 lines. Every 10 lines raises the level, up to 30. Start continues; Stop retains the board. Reset repeats the sequence.</p>
+<div id="c-rules">
+</div>
+</details>
+</aside>
+</main>
+<p id="c-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+</p>
+<noscript>JavaScript is required to play.</noscript>
+</div>
+</body>
+</html>

@@ -1,3 +1,5 @@
+import {mountTestCost} from './test-cost.mjs';
+import {compactPlayerName,visibleOutcome} from './arcade-copy.mjs';
 import {createPlacementPresenter} from './placement-motion.mjs';
 import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
@@ -16,6 +18,7 @@ function download(json, doc) {
   doc.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export function mountComparison(doc, { comparisonFactory = options => new Comparison(options), onExport = json => download(json, doc),window:win=globalThis } = {}) {
+  const updateCost=mountTestCost(doc);
   const $ = id => doc.getElementById(id), text = (id, value) => { $(id).textContent = value; };
   const tiles = [0, 1].map(index => Array.from({ length: 200 }, () => {
     const tile = doc.createElement('span'); tile.className = 'comparison-cell'; tile.setAttribute('aria-hidden', 'true');
@@ -24,6 +27,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
   const visual=new Map(),presenters=[0,1].map(lane=>createPlacementPresenter({window:win,onFrame:observation=>{visual.set(lane,observation);render(comparison.view);},onSettled:()=>{visual.delete(lane);}}));
   let previousAnnouncement = '', previousLaneStates = [];
   function render(view) {
+    const costLane=view.lanes[1];if(costLane)updateCost({gameId:costLane.observation.sessionId,receipt:costLane.lastDecision?.receipt,error:!!costLane.error,busy:costLane.status==='choosing',replay:view.mode==='replay',openAI:$('c-right').value==='openai',tracked:costLane.policy?.kind==='externalDecisions'});
     SETTINGS.forEach(key => { $('c-' + key).disabled = view.locked || (view.config.right==='openai' && ['nodeCap','timeMs'].includes(key)); });
     $('c-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     const ended = view.mode === 'live' && view.sample >= view.config.samples && view.lanes.every(l => l.outcome);
@@ -42,7 +46,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
       if(view.mode!=='replay')pairing?.observe(canonical.lastDecision?.receipt);
       const p=canonical.error||canonical.recoveryRequired?null:canonical.presentation,lane=p?{...p.before,policy:canonical.policy,assistance:canonical.assistance,search:canonical.search,status:p.phase==='placing'?'placing':'choosing',observation:visual.get(index)??p.before.observation}:canonical;
       const prefix = `c-${index}-`, obs = lane.observation;
-      text(prefix + 'heading',index===1&&pendingOpenAI?'Right · OpenAI Decisions · Connect to request approval':`${index ? 'Right' : 'Left'} · ${lane.player.name}`);
+      text(prefix + 'heading',index===1&&pendingOpenAI?'OpenAI Decisions':compactPlayerName(lane.player.name));
       text(prefix + 'status', STATUS[lane.status]); text(prefix + 'tier', `${providerProvenance(lane.policy, { recorded: view.mode === 'replay', pending: index === 1 && $('c-right').value === 'openai' && pairing?.session.state.state !== 'connected' })} · ${lane.assistance}`);
       if(index===1&&pendingOpenAI)text(prefix+'tier',pairing?.session.state.message??'Connect to request local owner approval.');
       for (const key of ['score', 'lines', 'level']) text(prefix + key, key === 'lines' ? linesProgress(obs[key]) : key==='level'?levelProgress(obs[key]):formatNumber(obs[key])); text(prefix + 'pieces', formatNumber(lane.pieces));
@@ -61,7 +65,7 @@ export function mountComparison(doc, { comparisonFactory = options => new Compar
         const label = doc.createElement('span'); label.textContent = type; item.append(mini, label); $(prefix + 'next').append(item);
       });
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
-      text(prefix + 'outcome', outcomeDetail(lane.recordedStatus ?? lane.status, obs, lane.error));
+      text(prefix + 'outcome', visibleOutcome(lane.recordedStatus ?? lane.status, obs, lane.error));
       text(prefix + 'choice', lane.lastDecision ? `${lane.lastDecision.candidate.piece} · ${Math.round(lane.lastDecision.latencyMs)} ms decision attempt latency${view.mode === 'replay' ? ' (recorded)' : ''}` : 'No piece selected yet.');
       text(prefix + 'details', JSON.stringify({ receipt:lane.lastDecision?.receipt??null,placement: lane.lastDecision?.candidate ?? null, search: lane.search, policy: lane.policy,
         recordedStatus: lane.recordedStatus ?? null, valueMeaning: 'Raw board features; scalar leaf value is not a probability.' }, null, 2));

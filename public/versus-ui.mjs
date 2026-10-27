@@ -1,3 +1,5 @@
+import {mountTestCost} from './test-cost.mjs';
+import {compactPlayerName,visibleOutcome} from './arcade-copy.mjs';
 import {createPlacementPresenter} from './placement-motion.mjs';
 import { providerProvenance } from './provider-provenance.mjs';
 import { mountDecisionPairing } from './decision-session.mjs';
@@ -14,16 +16,18 @@ function download(json, doc) {
   doc.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export function mountVersus(doc, { window: win, runnerFactory = options => new HumanVersus(options), onExport = json => download(json, doc) } = {}) {
+  const updateCost=mountTestCost(doc);
   const $ = id => doc.getElementById(id), text = (id, value) => { $(id).textContent = value; };
   const surface = $('v-human-game');
   const tiles = [0, 1].map(i => Array.from({ length: 200 }, () => { const e = doc.createElement('span'); e.className = 'comparison-cell'; e.setAttribute('aria-hidden', 'true'); $(`v-${i}-board`).append(e); return e; }));
   let visual=null;const presenter=createPlacementPresenter({window:win,onFrame:observation=>{visual=observation;render(runner.view);},onSettled:()=>{visual=null;}});
   let previousAnnouncement = '', previousLaneStates = [], lastFrame = null, frameHandle = null, disposed = false;
   function render(view) {
+    const costLane=view.lanes[1];if(costLane)updateCost({gameId:costLane.observation.sessionId,receipt:costLane.lastDecision?.receipt,error:!!costLane.error,busy:costLane.status==='choosing',replay:view.mode==='replay',openAI:$('v-provider')?.value==='openai',tracked:view.policies?.[1]?.kind==='externalDecisions'});
     $('v-reset').disabled=view.mode!=='replay'&&!!pairing?.resetBlocked;
     if($('v-provider'))$('v-provider').disabled=view.frameCount>0;
     const pendingOpenAI=view.mode!=='replay'&&!!pairing&&$('v-provider')?.value==='openai'&&pairing.session.state.state!=='connected';
-    if($('v-1-heading'))text('v-1-heading',pendingOpenAI?'OpenAI Decisions · Connect to request approval':view.lanes[1].player.name);
+    if($('v-1-heading'))text('v-1-heading',pendingOpenAI?'OpenAI Decisions':compactPlayerName(view.lanes[1].player.name));
     const unavailable=view.mode!=='replay'&&$('v-provider')?.value==='openai'&&(pairing?.session.state.state!=='connected'||(pairing?.blocked&&!view.lanes[1].outcome));
     text('v-1-provenance', providerProvenance(view.policies?.[1], { recorded: view.mode === 'replay', pending: unavailable && (pairing?.session.state.message ?? true) }));
     const replay = view.mode === 'replay', finished = view.state === 'completed', archiveBlocked = !replay && !!view.archiveError;
@@ -32,7 +36,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
     $('v-pause').disabled = !view.running && !view.busy && !view.playback;
     $('v-stop').disabled = view.state === 'ready' || view.state === 'stopped' || finished;
     $('v-step').disabled = view.running || view.busy || view.playback || archiveBlocked || (!replay && !!view.lanes[1].outcome) || unavailable;
-    text('v-step', replay ? 'Next saved frame' : 'Step algorithm');
+    text('v-step', replay ? 'Next saved frame' : 'Step');
     $('v-replay').disabled = !view.frameCount; $('v-export').disabled = !view.frameCount;
     const algorithm=view.lanes[1],algorithmPresentation=algorithm.error||algorithm.recoveryRequired?null:algorithm.presentation,algorithmPieces=algorithmPresentation?.before.pieces??algorithm.pieces;
     const progress = replay ? `Saved visual replay · Frame ${Math.max(0, view.replayIndex + 1)} of ${view.frameCount} · No new choices`
@@ -57,7 +61,7 @@ export function mountVersus(doc, { window: win, runnerFactory = options => new H
         for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) { const dot = doc.createElement('span'); if (occupied.has(`${x},${y}`)) dot.className = 'filled'; mini.append(dot); }
         const label = doc.createElement('span'); label.textContent = type; item.append(mini, label); $(prefix + 'next').append(item);
       });
-      text(prefix + 'outcome', outcomeDetail(lane.recordedStatus ?? lane.status, obs, lane.error));
+      text(prefix + 'outcome', visibleOutcome(lane.recordedStatus ?? lane.status, obs, lane.error));
       $(prefix + 'error').hidden = !lane.error; text(prefix + 'error', lane.error ?? '');
       text(prefix + 'details', JSON.stringify({ policy: view.policies[i], recordedStatus: lane.recordedStatus ?? null,
         receipt:lane.lastDecision?.receipt??null,placement: lane.lastDecision?.candidate ?? null, outcome: lane.outcome }, null, 2));
