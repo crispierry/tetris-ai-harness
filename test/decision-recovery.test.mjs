@@ -51,3 +51,21 @@ test('pending delivery, mismatched on-disk bytes and persistence failure remain 
  await writeFile(f.options.drainReference,JSON.stringify(f.drain),{mode:0o600});const fault=Object.assign(phase=>{if(phase==='before-rename')throw Error('dummy disk failure');},{mode:'fixture'});await assert.rejects(reconcileAbandonedBrowserRequest({...f.options,config:{...f.previous,faultInjection:fault}}),{code:'store_unavailable'});assert.deepEqual(await readFile(path.join(f.previous.directory,'ledger.json')),f.bytes);
  const held=await openDecisionStore({...f.previous,ownerRecovery:{expectedLedgerSHA256:f.options.expectedLedgerSHA256}});await held.transact(s=>{s.requests.old.deliveryPending=true;});await held.close();const bytes=await readFile(path.join(f.previous.directory,'ledger.json')),hash=sha(bytes);await writeFile(f.options.drainReference,JSON.stringify({...f.drain,afterDrainLedgerSHA256:hash}),{mode:0o600});await assert.rejects(reconcileAbandonedBrowserRequest({...f.options,expectedLedgerSHA256:hash}),{code:'reconciliation_required'});assert.deepEqual(await readFile(path.join(f.previous.directory,'ledger.json')),bytes);
 });
+test('immutable old qualification binds project/key even when a forged successor is internally qualified',async t=>{
+ const f=await fixture(t);await reconcileAbandonedBrowserRequest(f.options);const previous=structuredClone(f.previous),next=structuredClone(f.next);previous.qualification.projectEvidence.projectId='proj_forged';previous.qualification.projectEvidence.keyFingerprint=sha('other_dummy');next.qualification.projectEvidence=structuredClone(previous.qualification.projectEvidence);next.policy.qualificationDigest=digest(next.qualification);await assert.rejects(prepareBrowserSuccessor({previousConfig:previous,nextConfig:next}),{code:'successor_configuration'});
+});
+test('successor first durable snapshot already includes debits; write failures never expose a zero-count live ledger',async t=>{
+ const f=await fixture(t);await reconcileAbandonedBrowserRequest(f.options);let saw=0;
+ const fault=Object.assign((phase,s)=>{if(phase==='before-write'){saw++;assert.equal(s.used.attempts,28);assert.equal(s.predecessor.usedAttempts,28);throw Error('dummy first write failure');}},{mode:'fixture'});
+ await assert.rejects(prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:{...f.next,faultInjection:fault}}),{code:'store_unavailable'});assert.equal(saw,1);await assert.rejects(openDecisionStore(f.next),{code:'ENOENT'});
+ // Existing enrollment marker is intentionally never erased/re-enrolled after
+ // a missing ledger: preserve the hold for owner investigation, not a refill.
+ await assert.rejects(prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:f.next}),{code:'EEXIST'});
+});
+test('successor after-rename failure retains inherited debits and exact preparation can finish without resetting them',async t=>{
+ const f=await fixture(t);await reconcileAbandonedBrowserRequest(f.options);
+ const fault=Object.assign(phase=>{if(phase==='after-rename')throw Error('dummy uncertain persistence');},{mode:'fixture'});
+ await assert.rejects(prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:{...f.next,faultInjection:fault}}),{code:'store_unavailable'});
+ const old=await openDecisionStore(f.next);assert.equal(old.snapshot().used.attempts,28);assert.equal(old.snapshot().predecessor.usedAttempts,28);await old.close();
+ assert.equal((await prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:f.next})).remainingAttempts,972);
+});

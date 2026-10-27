@@ -8,9 +8,9 @@ import {qualifiedDecisionBrowser} from './decision-browser-qualification.mjs';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 async function proof(reference){const bytes=await readPrivateOwnerFile(reference,65536);return {reference,sha256:sha(bytes),value:JSON.parse(bytes)};}
-async function backup(file,bytes){let h;try{h=await open(file,'wx',0o600);await h.writeFile(bytes);await h.sync();}catch(e){if(e.code!=='EEXIST'||!(await readFile(file)).equals(bytes))throw e;}finally{await h?.close();}const d=await open(path.dirname(file),'r');try{await d.sync();}finally{await d.close();}}
+async function backup(file,bytes){let h;try{h=await open(file,'wx',0o600);await h.writeFile(bytes);await h.sync();}catch(e){if(e.code!=='EEXIST'||!Buffer.from(await readPrivateOwnerFile(file,16000000)).equals(bytes))throw e;}finally{await h?.close();}const d=await open(path.dirname(file),'r');try{await d.sync();}finally{await d.close();}}
 export async function reconcileAbandonedBrowserRequest({config,expectedLedgerSHA256,requestKey,authorizationReference,drainReference,successorLineage}={}){
- if(config?.policy?.kind!=='risk-accepted-project-browser-policy-1'||!/^[A-Za-z0-9_-]{1,80}$/.test(successorLineage??'')||successorLineage===config.lineage)fail('recovery_input');
+ if(config?.policy?.kind!=='risk-accepted-project-browser-policy-1'||digest(config.qualification)!==config.policy.qualificationDigest||!/^[A-Za-z0-9_-]{1,80}$/.test(successorLineage??'')||successorLineage===config.lineage)fail('recovery_input');
  const authority=await proof(authorizationReference),drain=await proof(drainReference),d=drain.value;
  if(authority.value.actor!=='Cris'||d.supervisedExitCode!==0||d.localFetchAndResponseStreamSettled!==true||d.ledgerOwnerLockReleased!==true||d.afterDrainLedgerSHA256!==expectedLedgerSHA256||!Number.isSafeInteger(d.serverPID)||d.serverPID<=1)fail('recovery_evidence');
  try{process.kill(d.serverPID,0);fail('recovery_server_alive');}catch(e){if(e.code!=='ESRCH')throw e;}
@@ -27,7 +27,7 @@ export async function reconcileAbandonedBrowserRequest({config,expectedLedgerSHA
 }
 export async function prepareBrowserSuccessor({previousConfig,nextConfig}={}){
  const a=previousConfig?.qualification?.projectEvidence,b=nextConfig?.qualification?.projectEvidence;
- if(!qualifiedDecisionBrowser(nextConfig?.qualification,nextConfig?.policy)||!a||a.projectId!==b.projectId||a.keyFingerprint!==b.keyFingerprint||b.thresholdAmountCents!==100||b.currency!=='USD'||b.interval!=='month'||previousConfig.directory===nextConfig.directory||previousConfig.lineage===nextConfig.lineage)fail('successor_configuration');
+ if(!qualifiedDecisionBrowser(nextConfig?.qualification,nextConfig?.policy)||!a||digest(previousConfig.qualification)!==previousConfig.policy.qualificationDigest||a.projectId!==b.projectId||a.keyFingerprint!==b.keyFingerprint||b.thresholdAmountCents!==100||b.currency!=='USD'||b.interval!=='month'||previousConfig.directory===nextConfig.directory||previousConfig.lineage===nextConfig.lineage)fail('successor_configuration');
  const old=await openDecisionStore(previousConfig);let next;
  try{
   const before=await old.inspect(),events=Object.values(before.ownerReconciliations??{}),event=events.at(-1);
@@ -37,12 +37,10 @@ export async function prepareBrowserSuccessor({previousConfig,nextConfig}={}){
   if(!before.successor)await old.transact(s=>{s.successor=binding;});
   const oldBytes=await readFile(path.join(previousConfig.directory,'ledger.json'));
   const predecessor={version:1,lineage:previousConfig.lineage,ledgerSHA256:sha(oldBytes),reconciliationId:event.id,usedAttempts:before.used.attempts};
-  next=await openDecisionStore({...nextConfig,enroll:true});const snapshot=await next.inspect();
-  if(snapshot.predecessor){if(digest(snapshot.predecessor)!==digest(predecessor))fail('successor_conflict');}
-  else{
-   if(snapshot.used.attempts||Object.keys(snapshot.runs).length||Object.keys(snapshot.requests).length||snapshot.browserSession)fail('successor_state');
-   await next.transact(s=>{s.used=structuredClone(before.used);s.predecessor=predecessor;s.browserSession={version:1,ownerHold:false,reconciliationRequired:false,reason:null};});
-  }
+  // Inherited debits are in the first durable ledger write; a failed carry can
+  // never expose an ordinary zero-allowance-history enrollment artifact.
+  next=await openDecisionStore({...nextConfig,enroll:true,successorSeed:{used:before.used,predecessor}});const snapshot=await next.inspect();
+  if(!snapshot.predecessor||digest(snapshot.predecessor)!==digest(predecessor))fail('successor_conflict');
   return {lineage:nextConfig.lineage,inheritedAttempts:before.used.attempts,remainingAttempts:nextConfig.policy.maxAttempts-(await next.inspect()).used.attempts,expiresAt:nextConfig.policy.expiresAt};
  }finally{await next?.close();await old.close();}
 }

@@ -7,10 +7,11 @@ import { validOwnerAbandonment,validPredecessor } from './decision-recovery-cont
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])])) : value;
 export const digest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const bad = code => { throw Object.assign(new Error(code), { code }); };
-export async function openDecisionStore({ directory, lineage, policy, enroll = false, faultInjection, ownerRecovery } = {}) {
+export async function openDecisionStore({ directory, lineage, policy, enroll = false, faultInjection, ownerRecovery, successorSeed } = {}) {
   if (faultInjection !== undefined && (typeof faultInjection !== 'function' || faultInjection.mode !== 'fixture')) bad('configuration');
   policy = structuredClone(policy);
   if(ownerRecovery!==undefined&&(!ownerRecovery||Object.keys(ownerRecovery).join(',')!=='expectedLedgerSHA256'||!/^[a-f0-9]{64}$/.test(ownerRecovery.expectedLedgerSHA256??'')||enroll||policy?.kind!=='risk-accepted-project-browser-policy-1'))bad('configuration');
+  if(successorSeed!==undefined&&(!enroll||ownerRecovery||!successorSeed||Object.keys(successorSeed).sort().join(',')!=='predecessor,used'||!validPredecessor({policy,lineage,...successorSeed})||Object.keys(successorSeed.used).sort().join(',')!=='attempts,estimatedMicros,inputTokens'||Object.values(successorSeed.used).some(n=>!Number.isSafeInteger(n)||n<0)))bad('configuration');
   if (!path.isAbsolute(directory ?? '') || !/^[A-Za-z0-9_-]{1,80}$/.test(lineage ?? '')) bad('configuration');
   const sourceRoot = fileURLToPath(new URL('./', import.meta.url));
   if (directory === sourceRoot.slice(0,-1) || directory.startsWith(sourceRoot)) bad('unsafe_store');
@@ -45,7 +46,9 @@ export async function openDecisionStore({ directory, lineage, policy, enroll = f
       // Enrollment marker survives ledger removal: even explicit enrollment cannot refill a lost lineage.
       const marker = await open(path.join(directory, 'enrolled.json'), 'wx', 0o600);
       try { await marker.writeFile(JSON.stringify({lineage, policyDigest:digest(policy)})); await marker.sync(); } finally { await marker.close(); }
-      state = { version: 1, lineage, policy, policyDigest: digest(policy), used: { attempts: 0, inputTokens: 0, estimatedMicros: 0 }, runs: {}, requests: {} }; await persist(state);
+      state = { version: 1, lineage, policy, policyDigest: digest(policy), used: structuredClone(successorSeed?.used??{ attempts: 0, inputTokens: 0, estimatedMicros: 0 }), runs: {}, requests: {} };
+      if(successorSeed){state.predecessor=structuredClone(successorSeed.predecessor);state.browserSession={version:1,ownerHold:false,reconciliationRequired:false,reason:null};}
+      await persist(state);
     }
     if (state.version !== 1 || state.lineage !== lineage || state.policyDigest !== digest(policy) || digest(state.policy) !== digest(policy) || !state.used || !state.runs || !state.requests || Object.values(state.requests).some(r => ['reserved','dispatch-intent'].includes(r.status)||(!ownerRecovery&&r.status==='uncertain')||r.deliveryPending===true)) bad('reconciliation_required');
     if (Object.keys(state.runs).length > policy.maxRuns || Object.keys(state.requests).length > Math.min(10000, policy.maxRuns * policy.maxEpochs * policy.maxPlacements)) bad('damaged_store');
