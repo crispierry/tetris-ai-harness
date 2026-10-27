@@ -112,12 +112,6 @@
 </div>
 <div class="play-toolbar">
 <label class="gravity-toggle" for="c-gravity" title="Keep falling while the computer thinks. Reset to change."><span>Gravity</span><input id="c-gravity" type="checkbox" role="switch" checked aria-describedby="c-gravity-help"></label>
-<p id="decision-cost" class="test-cost" hidden>
-</p>
-<p id="decision-cost-note" class="note" hidden>
-</p>
-<p id="decision-budget-risk" class="budget-risk" hidden>
-</p>
 <div class="primary-actions">
 <button id="c-start" class="button button-primary">Start</button>
 <button id="c-pause" class="button button-secondary" disabled>Pause</button>
@@ -126,6 +120,12 @@
 </div>
 <button id="c-reset" class="button button-quiet">Reset</button>
 </div>
+<p id="decision-cost" class="test-cost" hidden>
+</p>
+<p id="decision-cost-note" class="note" hidden>
+</p>
+<p id="decision-budget-risk" class="budget-risk" hidden>
+</p>
 <section id="c-speed-summary" class="speed-summary" aria-labelledby="c-speed-heading" hidden>
 <h3 id="c-speed-heading">Run finished</h3>
 <p id="c-speed-text"></p>
@@ -162,7 +162,7 @@
 </label>
 </div>
 </details>
-<p class="note">Same piece sequence. Independent games. Results describe these samples only; they do not establish a winner or model quality. The decision deadline is 1500 ms. Capped/error runs are censored.</p>
+<p class="note">Same piece sequence. Independent games. Results describe these samples only; they do not establish a winner or model quality. Local decisions have a 1.5-second deadline; OpenAI uses its session request deadline. Gravity continues while players think. Capped/error runs are censored.</p>
 <p id="c-results">
 </p>
 <pre id="c-pairs">

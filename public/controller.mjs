@@ -1,3 +1,4 @@
+import {decisionDeadline} from './decision-deadline.mjs';
 import {compactReceipt,localSearchReceipt} from './provider-policy.mjs';
 import { createGame, start, DEFAULT_SEED, isTerminal } from './engine.mjs';
 import { observe, enumerate, execute, candidateEvidence, freeze } from './harness.mjs';
@@ -90,24 +91,25 @@ export class Controller {
     this.#provider.invalidateAccounting?.();this.#last=null;this.#pending = job; this.#status = 'choosing'; this.#error = null; this.#emit();
     let timer, abortListener;
     try {
+      const deadline=decisionDeadline(this.#provider,this.#deadline);
       const candidates = enumerate(current, binding);
       if (!candidates.length) throw new Error('No reachable placements');
       if (candidates.length > this.#provider.capabilities.maxCandidates) throw new Error('Provider candidate limit exceeded; no placements were discarded');
-      const packet = instructionPacket(observe(current, binding), candidates.map(c => candidateEvidence(current, c, binding)), { requestId: job.requestId, deadlineMs: this.#deadline });
+      const packet = instructionPacket(observe(current, binding), candidates.map(c => candidateEvidence(current, c, binding)), { requestId: job.requestId, deadlineMs: deadline.requestMs });
       if (new TextEncoder().encode(JSON.stringify(packet)).length > 1048576) throw new Error('Decision packet exceeds one MiB limit');
       const started = performance.now();
       const guard = new Promise((_, reject) => {
         abortListener = () => reject(new Error('Cancelled'));
         abort.signal.addEventListener('abort', abortListener, { once: true });
-        timer = setTimeout(() => reject(new Error('Decision deadline exceeded')), this.#deadline);
+        timer = setTimeout(() => reject(new Error('Decision deadline exceeded')), deadline.waitMs);
       });
       const response = await Promise.race([Promise.resolve().then(() => this.#provider.decide(packet, { signal: abort.signal })), guard]);
       if (this.#pending !== job || abort.signal.aborted || this.#revision !== binding.revision) return null;
-      if (performance.now() - started >= this.#deadline) throw new Error('Decision deadline exceeded');
+      if (performance.now() - started >= deadline.waitMs) throw new Error('Decision deadline exceeded');
       if (new TextEncoder().encode(JSON.stringify(response)).length > 4096) throw new Error('Decision response exceeds size limit');
       const id = validateChoice(packet, response), candidate = candidates.find(c => c.id === id);
       const next = execute(current, candidate, binding), evidence = packet.candidates.find(c => c.id === id);
-      if(this.#pending!==job||abort.signal.aborted||performance.now()-started>=this.#deadline)throw new Error('Decision deadline exceeded');
+      if(this.#pending!==job||abort.signal.aborted||performance.now()-started>=deadline.waitMs)throw new Error('Decision deadline exceeded');
       clearTimeout(timer);if(abortListener)abort.signal.removeEventListener('abort',abortListener);abortListener=null;
       if(!this.#record({kind:'computer',requestId:job.requestId,revision:binding.revision,selectedCandidateId:candidate.id,
         receipt:this.#provider.kind==='remote'?compactReceipt(this.#provider.lastReceipt):this.#provider.runMetadata?.search?localSearchReceipt(this.#provider.lastReceipt):null,latencyMs:performance.now()-started,

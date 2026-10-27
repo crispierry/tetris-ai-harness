@@ -10,7 +10,7 @@ function config(root,lineage,now=Date.now()){
  const policy={kind:'risk-accepted-project-browser-policy-1',qualificationDigest:digest(qualification),maxAttempts:1000,maxRuns:64,maxEpochs:100,maxPlacements:1000,maxConcurrentUpstream:1,timeoutMs:1500,expiresAt:now+3600000,retryLimit:0,fallback:'none'};
  return {directory:path.join(root,lineage),lineage,policy,qualification};
 }
-async function fixture(t){const root=await mkdtemp(path.join(await realpath(os.tmpdir()),'tetris-owner-recovery-'));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));const previous=config(root,'old'),next=config(root,'next');const store=await openDecisionStore({...previous,enroll:true});
+async function fixture(t,{budget=100}={}){const root=await mkdtemp(path.join(await realpath(os.tmpdir()),'tetris-owner-recovery-'));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));const previous=config(root,'old'),next=config(root,'next');for(const c of [previous,next]){c.qualification.projectEvidence.thresholdAmountCents=budget;c.policy.qualificationDigest=digest(c.qualification);}const store=await openDecisionStore({...previous,enroll:true});
  await store.transact(s=>{s.used.attempts=28;s.browserSession={version:1,ownerHold:true,reconciliationRequired:true,reason:'request_interrupted'};s.runs.run={id:'run',capabilityDigest:'b'.repeat(64),epoch:1,placements:26,expected:null,closed:true,terminal:false,interrupted:true,expiresAt:previous.policy.expiresAt};s.requests.old={digest:'d'.repeat(64),status:'completed',upstream:true,runId:'run',epoch:0,requestId:'previous',deadline:Date.now()-1000,deliveryPending:false};s.requests.target={digest:'c'.repeat(64),status:'uncertain',upstream:true,runId:'run',epoch:1,requestId:'abandoned',deadline:Date.now()-1000,deliveryPending:false};});await store.close();
  const bytes=await readFile(path.join(previous.directory,'ledger.json')),expectedLedgerSHA256=sha(bytes),authorizationReference=path.join(root,'authority.json'),drainReference=path.join(root,'drain.json');
  const child=spawnSync(process.execPath,['-e','']);assert.equal(child.status,0);
@@ -51,8 +51,28 @@ test('new successor carries debits exactly once and preserves monthly/project/ke
  next=await openDecisionStore(f.next);const service=await createDecisionBrowserService({store:next,...f.next,credential:key,fetchImpl:()=>{throw Error('must not dispatch');}});const grant=await service.owner.issueRun({laneId:'new',controllerSessionBase:'new'}),a=await service.control(grant.capability,'runStatus');assert.equal(a.attempts,29);assert.equal(a.remainingAttempts,971);assert.equal(a.actualCostUSD,null);await service.close();
  const wrong=structuredClone(f.next);wrong.qualification.projectEvidence.projectId='proj_other';wrong.policy.qualificationDigest=digest(wrong.qualification);await assert.rejects(prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:wrong}),{code:'successor_configuration'});
 });
+test('deadline recovery carries all historical debits into a bounded $5 Marathon successor',async t=>{
+ const f=await fixture(t,{budget:500});
+ const old=await openDecisionStore({...f.previous,ownerRecovery:{expectedLedgerSHA256:f.options.expectedLedgerSHA256}});
+ await old.transact(s=>{s.browserSession.reason='decision_timeout';});await old.close();
+ const bytes=await readFile(path.join(f.previous.directory,'ledger.json')),hash=sha(bytes);await writeFile(f.options.drainReference,JSON.stringify({...f.drain,afterDrainLedgerSHA256:hash}),{mode:0o600});
+ await reconcileAbandonedBrowserRequest({...f.options,expectedLedgerSHA256:hash});
+ const next=structuredClone(f.next);Object.assign(next.policy,{kind:'risk-accepted-project-browser-policy-2',maxAttempts:2000,timeoutMs:10000});
+ const result=await prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:next});assert.equal(result.inheritedAttempts,28);assert.equal(result.remainingAttempts,1972);
+ const store=await openDecisionStore(next);assert.equal(store.snapshot().used.attempts,28);assert.equal(store.snapshot().predecessor.usedAttempts,28);await store.close();
+});
 test('ordinary reopen rejects forged disposition/history and successor counter regression',async t=>{
  const f=await fixture(t);await reconcileAbandonedBrowserRequest(f.options);const file=path.join(f.previous.directory,'ledger.json'),bytes=await readFile(file),s=JSON.parse(bytes);s.requests.target.digest='e'.repeat(64);await writeFile(file,JSON.stringify(s),{mode:0o600});await assert.rejects(openDecisionStore(f.previous),{code:'damaged_store'});await writeFile(file,bytes,{mode:0o600});await prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:f.next});const nextFile=path.join(f.next.directory,'ledger.json'),n=JSON.parse(await readFile(nextFile));n.used.attempts=0;await writeFile(nextFile,JSON.stringify(n),{mode:0o600});await assert.rejects(openDecisionStore(f.next),{code:'damaged_store'});
+});
+test('reopening either an original or successor ledger cannot erase upstream attempt debits',async t=>{
+ const f=await fixture(t);await reconcileAbandonedBrowserRequest(f.options);
+ const file=path.join(f.previous.directory,'ledger.json'),bytes=await readFile(file),state=JSON.parse(bytes);
+ state.used.attempts=1;await writeFile(file,JSON.stringify(state),{mode:0o600});
+ await assert.rejects(openDecisionStore(f.previous),{code:'damaged_store'});
+ assert.deepEqual(JSON.parse(await readFile(file)),state);
+ await writeFile(file,bytes,{mode:0o600});await prepareBrowserSuccessor({previousConfig:f.previous,nextConfig:f.next});
+ const next=await openDecisionStore(f.next);await next.transact(s=>{s.runs.run=structuredClone(state.runs.run);s.requests.new={...state.requests.old};});await next.close();
+ await assert.rejects(openDecisionStore(f.next),{code:'damaged_store'});
 });
 test('another unresolved request refuses abandonment; recovery handles cannot enable browser service',async t=>{
  const f=await fixture(t),held=await openDecisionStore({...f.previous,ownerRecovery:{expectedLedgerSHA256:f.options.expectedLedgerSHA256}});await assert.rejects(createDecisionBrowserService({store:held,...f.previous,credential:key}),{code:'browser_configuration'});await held.transact(s=>{s.requests.second={...s.requests.target,requestId:'other'};});await held.close();const bytes=await readFile(path.join(f.previous.directory,'ledger.json')),hash=sha(bytes);await writeFile(f.options.drainReference,JSON.stringify({...f.drain,afterDrainLedgerSHA256:hash}),{mode:0o600});await assert.rejects(reconcileAbandonedBrowserRequest({...f.options,expectedLedgerSHA256:hash}),{code:'recovery_state'});assert.deepEqual(await readFile(path.join(f.previous.directory,'ledger.json')),bytes);

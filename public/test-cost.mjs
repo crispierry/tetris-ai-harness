@@ -5,7 +5,7 @@ export const COST_SOURCE='https://developers.openai.com/api/docs/guides/decision
 export const COST_BASIS='USD, standard global Decisions pricing checked Oct 26, 2026. Per million input tokens: $0.10 ordinary, $0.01 cache reads, $0.125 default 30-minute cache writes. Cache counts replace ordinary tokens; output is free. Requests over 272,000 input tokens use 2× input rates. Billing premiums/adjustments and failed requests may add charges. This is not an invoice.';
 const alias=(values)=>{const present=values.filter(v=>v!==undefined);return present.length&&present.some(v=>v!==present[0])?null:present[0]??0;};
 export function estimateDecisionNanos(receipt){
- if(validBrowserReceipt(receipt)&&receipt.version==='decision-browser-forced-receipt-1')return 0n;
+ if(validBrowserReceipt(receipt)&&/^decision-browser-forced-receipt-[12]$/.test(receipt.version))return 0n;
  if(!validBrowserReceipt(receipt)||!/^gpt-6-luna(?:-\d{4}-\d{2}-\d{2})?$/.test(receipt.observedModel))return null;
  const u=receipt.usage,read=alias([u.cached_input_tokens,u.cache_read_input_tokens,u.input_tokens_details?.cached_tokens]),write=alias([u.cache_write_input_tokens,u.input_tokens_details?.cache_write_tokens]);
  if(read===null||write===null||read+write>u.input_tokens)return null;

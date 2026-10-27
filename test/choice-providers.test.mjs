@@ -19,6 +19,25 @@ function success(request, protocol, alter = x => x) {
   return { status: 200, artifactRef: 'fixture:test/choice-providers.test.mjs#success', body: { model: protocol === 'decisions' ? 'gpt-6-luna' : 'jev-1.14.0',
     answers: protocol === 'decisions' ? [answer] : { placement: answer }, usage: { input_tokens: 100, output_tokens: 5 } } };
 }
+test('Decisions options expose distinct canonical consequences without replacing the model choice', async () => {
+  const initial=start(createGame(42)),board=initial.board.map(row=>[...row]);
+  board[19]=Array.from({length:10},(_,x)=>x===5?null:'J');
+  const packet=makePacket({...initial,board,active:{type:'I',rotation:1,x:3,y:0}});
+  const clear=packet.candidates.find(c=>c.linesDelta===1),stack=packet.candidates.find(c=>c.features.holes>0);
+  assert(clear);assert(stack);
+  let request;
+  const adapter=createChoiceAdapter({protocol:'decisions',transport:fixture(async r=>{request=r;return success(r,'decisions');})});
+  const choice=await adapter.decide(packet),question=request.body.questions[0],options=question.choices;
+  assert.deepEqual(JSON.parse(request.body.input),semanticPacket(packet));
+  assert.deepEqual(options.map(c=>c.value),packet.candidates.map(c=>c.id));
+  assert.match(options.find(c=>c.value===clear.id).description,/lines cleared 1; holes 0/);
+  assert.match(options.find(c=>c.value===stack.id).description,new RegExp(`holes ${stack.features.holes} `));
+  assert.notEqual(options.find(c=>c.value===clear.id).description,options.find(c=>c.value===stack.id).description);
+  assert.match(question.instructions,/survive long enough to clear 300 lines/);
+  assert.match(question.instructions,/empty cells below occupied cells/);
+  assert.match(question.instructions,/visible next five pieces/);
+  assert.equal(choice.selectedCandidateId,packet.candidates.at(-1).id);
+});
 for (const protocol of ['decisions', 'jev']) {
   test(`${protocol}: blocking fixture respects minimum adapter/packet deadline and never commits`,async()=>{
     const packet=makePacket();
@@ -93,15 +112,19 @@ for (const protocol of ['decisions', 'jev']) {
       const d = new Controller({ provider: bad }); await d.step(); assert.equal(d.view.pieces, 0); assert.equal(bad.lastReceipt.errorCode, 'model_mismatch');
     }
   });
-  test(`${protocol}: Reset then immediate Step, late ownership, deadline and sanitized errors`, async () => {
+  test(`${protocol}: Reset then immediate Step, late ownership, deadline and sanitized errors`, async t => {
     let calls = 0, late;
     const adapter = createChoiceAdapter({ protocol, transport: fixture(r => { calls++; if (calls === 1) return new Promise(resolve => { late = () => resolve(success(r, protocol)); }); return success(r, protocol); }) });
     const c = new Controller({ provider: adapter }); const old = c.step(); await delay(0); c.reset(); const fresh = c.step(); await Promise.all([old, fresh]);
     assert.equal(c.view.pieces, 1); const receipt = adapter.lastReceipt; late(); await delay(0); assert.equal(c.view.pieces, 1); assert.equal(adapter.lastReceipt, receipt);
     await c.step(); assert.equal(c.view.pieces, 2);
-    let aborted = false;
-    const hung = createChoiceAdapter({ protocol, config: { timeoutMs: 5 }, transport: fixture((r, { signal }) => { signal.addEventListener('abort', () => { aborted = true; }); return new Promise(() => {}); }) });
-    const d = new Controller({ provider: hung }); await d.step(); assert.equal(d.view.pieces, 0); assert.equal(hung.lastReceipt.errorCode, 'timeout'); assert(aborted);
+    let aborted = false,dispatched;const entered=new Promise(resolve=>{dispatched=resolve;});
+    const hung = createChoiceAdapter({ protocol, config: { timeoutMs: 1000 }, transport: fixture((r, { signal }) => { signal.addEventListener('abort', () => { aborted = true; });dispatched();return new Promise(() => {}); }) });
+    const d = new Controller({ provider: hung,deadlineMs:5000 });
+    t.mock.timers.enable({apis:['setTimeout']});
+    try{const pending=d.step();await entered;t.mock.timers.tick(1000);await pending;}
+    finally{t.mock.timers.reset();}
+    assert.equal(d.view.pieces, 0); assert.equal(hung.lastReceipt.errorCode, 'timeout'); assert.equal(hung.lastReceipt.attempts,1);assert(aborted);
     for (const [status, code] of [[401, 'authentication'], [404, 'unavailable'], [429, 'rate_limit'], [503, 'transport_ambiguous']]) {
       const bad = createChoiceAdapter({ protocol, transport: fixture(async () => ({ status, body: { message: 'secret-sentinel' } })) });
       const e = new Controller({ provider: bad }); await e.step(); assert.equal(bad.lastReceipt.errorCode, code); assert.equal(e.view.pieces, 0);

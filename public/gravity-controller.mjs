@@ -1,3 +1,4 @@
+import {decisionDeadline} from './decision-deadline.mjs';
 import {createGame,start,DEFAULT_SEED,isTerminal} from './engine.mjs';
 import {observe,candidateEvidence,freeze} from './harness.mjs';
 import {instructionPacket,validateChoice} from './briefing.mjs';
@@ -73,14 +74,15 @@ export class GravityController{
   this.#pending=job;this.#last=null;this.#error=null;this.#status='choosing';this.#provider.invalidateAccounting?.();this.#schedule(job);this.#emit();
   let timer,abortListener;
   try{
+   const deadline=decisionDeadline(this.#provider,this.#deadline);
    if(this.#provider.kind==='remote'&&typeof this.#provider.confirmGravity!=='function')throw new Error('This connection needs simulation mode. Reset, then turn Gravity off.');
    if(turn.offered.length>this.#provider.capabilities.maxCandidates)throw new Error('Provider candidate limit exceeded; no placements were discarded');
-   const packet=instructionPacket(observe(turn.state,binding),turn.offered.map(c=>candidateEvidence(turn.state,c,binding)),{requestId:job.requestId,deadlineMs:this.#deadline,gravity:true});
+   const packet=instructionPacket(observe(turn.state,binding),turn.offered.map(c=>candidateEvidence(turn.state,c,binding)),{requestId:job.requestId,deadlineMs:deadline.requestMs,gravity:true});
    if(new TextEncoder().encode(JSON.stringify(packet)).length>1048576)throw new Error('Decision packet exceeds one MiB limit');
    let timeout;const guard=new Promise((_,reject)=>{timeout=()=>reject(new Error('Decision deadline exceeded'));abortListener=()=>reject(new Error('Cancelled'));abort.signal.addEventListener('abort',abortListener,{once:true});});
-   const response=await Promise.race([Promise.resolve().then(async()=>{const release=await admitDecision?.(abort.signal);try{if(abort.signal.aborted)throw new Error('Cancelled');job.decisionStarted=this.#clock.now();timer=this.#clock.setTimeout(timeout,this.#deadline);return await this.#provider.decide(packet,{signal:abort.signal,gravity:true});}finally{release?.();}}),guard]);
+   const response=await Promise.race([Promise.resolve().then(async()=>{const release=await admitDecision?.(abort.signal);try{if(abort.signal.aborted)throw new Error('Cancelled');job.decisionStarted=this.#clock.now();timer=this.#clock.setTimeout(timeout,deadline.waitMs);return await this.#provider.decide(packet,{signal:abort.signal,gravity:true});}finally{release?.();}}),guard]);
    if(this.#pending!==job||job.finalizing||abort.signal.aborted)return null;
-   job.latencyMs=this.#clock.now()-job.decisionStarted;if(job.latencyMs>=this.#deadline)throw new Error('Decision deadline exceeded');
+   job.latencyMs=this.#clock.now()-job.decisionStarted;if(job.latencyMs>=deadline.waitMs)throw new Error('Decision deadline exceeded');
    if(new TextEncoder().encode(JSON.stringify(response)).length>4096)throw new Error('Decision response exceeds size limit');
    const id=validateChoice(packet,response);job.receipt=this.#provider.kind==='remote'?compactReceipt(this.#provider.lastReceipt):this.#provider.runMetadata?.search?localSearchReceipt(this.#provider.lastReceipt):null;this.#advance(job);if(this.#pending!==job||job.finalizing||abort.signal.aborted)return null;const beforePieces=this.#pieces+turn.locks;turn.choose(id);job.selected=id;this.#state=turn.state;
    const applied=turn.placement,placement=applied?freeze({beforeObservation:observe(applied.before,binding),beforePieces,candidate:candidateEvidence(applied.before,applied.candidate,binding)}):null;

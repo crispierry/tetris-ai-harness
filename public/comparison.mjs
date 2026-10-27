@@ -38,7 +38,8 @@ export function providerFor(key, config) {
   if(key==='lookahead')return createConfigurableLookaheadProvider({depth:config.depth??2,nodeCap:config.nodeCap??4000,callCap:config.nodeCap??4000,timeMs:config.timeMs??500});
   if (key === 'local') return heuristic();
   if (key === 'delay' || key === 'error') return mockProvider({ mode: key, delayMs: 250 });
-  return createLookaheadProvider({ depth: key === 'look2' ? 2 : 1, nodeCap: config.nodeCap, callCap: config.nodeCap, timeMs: config.timeMs });
+  if (key === 'look1' || key === 'look2') return createLookaheadProvider({ depth: key === 'look2' ? 2 : 1, nodeCap: config.nodeCap, callCap: config.nodeCap, timeMs: config.timeMs });
+  throw new RangeError('Unknown comparison player.');
 }
 function compactObservation(o) {
   return { rulesVersion: o.rulesVersion, board: o.board.map(row => row.map(c => c ?? '.').join('')),

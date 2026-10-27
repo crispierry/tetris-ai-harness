@@ -26,6 +26,7 @@
 .control-rail label{display:block;font-size:.8125rem;font-weight:600;color:var(--muted)}.player-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.player-choice{min-inline-size:0}.single-player-settings{grid-template-columns:minmax(0,1fr) minmax(88px,.4fr)}.depth-control{min-inline-size:0}
 .arcade-shell select,.arcade-shell input{display:block;inline-size:100%;min-inline-size:0;min-block-size:44px;padding:9px 10px;margin:4px 0 12px;border:1px solid #62748b;border-radius:7px;background:#131c28;color:var(--text,#f0f3f5);font:inherit}
 .primary-actions,.archive-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-block:12px 8px}
+.primary-actions>.button{block-size:44px;min-inline-size:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .button{min-block-size:44px;font-size:.875rem;font-weight:650;line-height:1.3;padding:9px 10px;overflow-wrap:anywhere}.button-quiet{display:block;background:transparent;color:var(--muted);border:1px solid var(--border);inline-size:100%}
 .run-progress{font-size:.8125rem;color:var(--muted);font-weight:500;margin:12px 0}.note,.hint{font-size:.8125rem;line-height:1.5;color:var(--muted)}
 .budget-risk{font-size:.8125rem;color:#ffdc8a;line-height:1.5;margin:10px 0}.test-cost{font-size:.875rem;font-variant-numeric:tabular-nums;margin:12px 0 4px;color:var(--text,#f0f3f5)}

@@ -1,1 +1,1 @@
-{"name":"local-browser-app-scaffold","version":"0.0.0","private":true,"type":"module","engines":{"node":"24.22.1"},"scripts":{"test":"node --test","start":"node server.mjs","verify:decision-record":"node verify-decision-record.mjs"}}
+{"name":"tetris-ai-harness","version":"0.1.0","private":true,"license":"MIT","type":"module","engines":{"node":"24.22.1"},"scripts":{"test":"node --test","start":"node local-launch.mjs","verify:decision-record":"node verify-decision-record.mjs"}}

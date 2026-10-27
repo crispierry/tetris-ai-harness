@@ -10,7 +10,7 @@ const bad = code => { throw Object.assign(new Error(code), { code }); };
 export async function openDecisionStore({ directory, lineage, policy, enroll = false, faultInjection, ownerRecovery, successorSeed } = {}) {
   if (faultInjection !== undefined && (typeof faultInjection !== 'function' || faultInjection.mode !== 'fixture')) bad('configuration');
   policy = structuredClone(policy);
-  if(ownerRecovery!==undefined&&(!ownerRecovery||Object.keys(ownerRecovery).join(',')!=='expectedLedgerSHA256'||!/^[a-f0-9]{64}$/.test(ownerRecovery.expectedLedgerSHA256??'')||enroll||policy?.kind!=='risk-accepted-project-browser-policy-1'))bad('configuration');
+  if(ownerRecovery!==undefined&&(!ownerRecovery||Object.keys(ownerRecovery).join(',')!=='expectedLedgerSHA256'||!/^[a-f0-9]{64}$/.test(ownerRecovery.expectedLedgerSHA256??'')||enroll||!['risk-accepted-project-browser-policy-1','risk-accepted-project-browser-policy-2'].includes(policy?.kind)))bad('configuration');
   if(successorSeed!==undefined&&(!enroll||ownerRecovery||!successorSeed||Object.keys(successorSeed).sort().join(',')!=='predecessor,used'||!validPredecessor({policy,lineage,...successorSeed})||Object.keys(successorSeed.used).sort().join(',')!=='attempts,estimatedMicros,inputTokens'||Object.values(successorSeed.used).some(n=>!Number.isSafeInteger(n)||n<0)))bad('configuration');
   if (!path.isAbsolute(directory ?? '') || !/^[A-Za-z0-9_-]{1,80}$/.test(lineage ?? '')) bad('configuration');
   directory = path.resolve(directory);
@@ -57,6 +57,12 @@ export async function openDecisionStore({ directory, lineage, policy, enroll = f
     for (const [key,r] of Object.entries(state.requests)) if ((!['completed','rejected',...(ownerRecovery?['uncertain']:[])].includes(r.status)&&!validOwnerAbandonment(state,key,r,digest)) || !/^[a-f0-9]{64}$/.test(r.digest ?? '') || !state.runs[r.runId]) bad('damaged_store');
     for (const key of ['attempts','inputTokens','estimatedMicros']) if (!Number.isSafeInteger(state.used[key]) || state.used[key] < 0) bad('damaged_store');
     if(state.predecessor&&!validPredecessor(state))bad('damaged_store');
+    // A reload must never restore attempts that have already reached upstream.
+    // Predecessor debits cover older ledgers; this ledger's dispatches add to them.
+    if (['risk-accepted-project-browser-policy-1','risk-accepted-project-browser-policy-2'].includes(policy.kind)) {
+      const dispatched = Object.values(state.requests).filter(r => r.upstream === true).length;
+      if (state.used.attempts < (state.predecessor?.usedAttempts ?? 0) + dispatched) bad('damaged_store');
+    }
   } catch (e) { await lock.close(); await unlink(lockPath); throw e; }
   return Object.freeze({
     get sound() { return !broken && !closed; },
