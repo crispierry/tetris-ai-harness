@@ -8,11 +8,18 @@ export function createDecisionBridge({ grant, fetchImpl = globalThis.fetch, onAc
   const capability=grant.capability,base=grant.controllerSessionBase,browser=grant.admission?.mode==='project-limit-browser';
   let epoch = grant.epoch, active = null, serial = 0, receipt = null, receiptSerial = 0, closed=false, status=grant.admission ?? null, requiresReset=false,confirmationUncertain=false;
   const statusReads=new Set(),statusAborts=new Set();
-  let accountingRevision=0,statusSerial=0,freshness=status?'current':'unknown';
+  let accountingRevision=0,statusSerial=0,statusFlight=null,freshness=status?'current':'unknown';
   const accounting=()=>freshness==='current'?immutable({...status,freshness:'current'}):immutable({freshness,attempts:null,remainingAttempts:null,reason:'Current accounting is unknown until authenticated reconciliation settles.'});
   const notify=()=>{try{onAccounting(accounting());}catch{}};
   const invalidate=()=>{accountingRevision++;for(const abort of statusAborts)abort.abort();freshness='stale';notify();};
-  function refreshStatus(){const operation=readStatus();statusReads.add(operation);operation.then(()=>statusReads.delete(operation),()=>statusReads.delete(operation));return operation;}
+  function refreshStatus(){
+    // A panel refresh and a decision may need the same current accounting.
+    // Share that read; Reset/Stop still invalidate it through the revision fence.
+    if(statusFlight?.revision===accountingRevision)return statusFlight.operation;
+    const operation=readStatus(),flight={revision:accountingRevision,operation};statusFlight=flight;statusReads.add(operation);
+    const settled=()=>{statusReads.delete(operation);if(statusFlight===flight)statusFlight=null;};
+    operation.then(settled,settled);return operation;
+  }
   async function readStatus(){if(closed)fail('cancelled');if(active)fail('accounting_pending');const revision=accountingRevision,serial=++statusSerial,abort=new AbortController();statusAborts.add(abort);try{const value=immutable(await post('/decision/control',{action:'runStatus'},abort.signal));if(browser&&!validBrowserAccounting(value))fail('schema');if(closed||active||revision!==accountingRevision||serial!==statusSerial)fail('accounting_stale');status=value;freshness='current';notify();return status;}catch(error){if(!closed&&revision===accountingRevision&&serial===statusSerial){freshness='unknown';notify();}throw error;}finally{statusAborts.delete(abort);}}
   async function post(route,body,signal) {
     const response = await fetchImpl(route,{method:'POST',headers:{'content-type':'application/json','x-decision-capability':capability},body:JSON.stringify(body),signal,redirect:'error',credentials:'same-origin'});

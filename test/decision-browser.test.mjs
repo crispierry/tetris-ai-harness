@@ -62,6 +62,23 @@ test('browser bridge actual choice/receipt/ack/reset retains aggregate across ep
  await f.bridge.close();await f.service.close();const reopened=await openDecisionStore({directory:path.join(f.root,'ledger'),lineage:'dummy-browser',policy:f.policy});const service=await createDecisionBrowserService({store:reopened,...{policy:f.policy,qualification:f.qualification},credential:dummy,fetchImpl:upstream()});assert.equal(service.status().available,false);await assert.rejects(service.owner.issueRun({laneId:'new',controllerSessionBase:'new'}));await service.close();
 });
 
+test('an overlapping UI accounting refresh cannot reject the first browser decision',async t=>{
+ let calls=0,release,entered;const waiting=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+ const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++})});let reads=0;
+ const bridge=createDecisionBridge({grant:f.grant,fetchImpl:async(route,options)=>{
+  if(JSON.parse(options.body).action==='runStatus'&&++reads===1){entered();await gate;}
+  return f.fetchHTTP(route,options);
+ }});
+ t.after(()=>bridge.close().catch(()=>{}));
+ const controller=new Controller({sessionId:'browser',provider:bridge}),step=controller.step();await waiting;
+ // Start returns while its first decision is choosing; the mounted UI then
+ // refreshes the same authenticated accounting for its status panel.
+ const refresh=bridge.status();release();await Promise.all([step,refresh]);
+ assert.equal(controller.view.error,null);assert.equal(controller.view.pieces,1);assert.equal(calls,1);
+ assert.equal(Object.values(f.store.snapshot().requests)[0].deliveryPending,false);
+ assert.equal(bridge.runMetadata.accounting.freshness,'current');
+});
+
 test('one actual global fetch: overlap does not cancel peer; POST cancellation holds reads and Reset/new grants/restart cannot clear uncertainty',async t=>{
  let release,entered,calls=0;const gate=new Promise(r=>entered=r);const f=await fixture(t,{fetchImpl:upstream({inspect:()=>calls++,hold:()=>new Promise(r=>{release=r;entered();})})});const other=await f.service.owner.issueRun({laneId:'other',controllerSessionBase:'other'}),abort=new AbortController(),work=f.service.decide(f.grant.capability,await packet(),{signal:abort.signal});await gate;
  await assert.rejects(f.service.decide(other.capability,await packet('other')),{code:'overlap'});assert.equal(abort.signal.aborted,false);assert.equal(calls,1);abort.abort();await assert.rejects(work);const a=await f.service.control(f.grant.capability,'runStatus');assert.equal(a.ownerHold,true);assert.equal(a.uncertain,1);assert(validBrowserAccounting(a));await assert.rejects(f.service.control(f.grant.capability,'advanceEpoch',1));await assert.rejects(f.service.owner.issueRun({laneId:'new',controllerSessionBase:'new'}));await assert.rejects(f.service.close(),{code:'drain_pending'});await assert.rejects(openDecisionStore({directory:path.join(f.root,'ledger'),lineage:'dummy-browser',policy:f.policy}));release();await wait(10);await f.service.close();await assert.rejects(openDecisionStore({directory:path.join(f.root,'ledger'),lineage:'dummy-browser',policy:f.policy,enroll:true}),{code:'reconciliation_required'});
@@ -76,6 +93,28 @@ test('lost completed delivery and acknowledged stale response cause owner hold i
  const f=await fixture(t);const r=await f.service.decide(f.grant.capability,await packet());assert.equal(f.service.status().available,false);await assert.rejects(f.service.control(f.grant.capability,'advanceEpoch',1));await f.service.control(f.grant.capability,'acceptDecision',undefined,{requestId:r.choice.requestId});assert.equal(f.service.status().available,true);await f.service.control(f.grant.capability,'interrupt',undefined,{requestId:r.choice.requestId});assert.equal((await f.service.control(f.grant.capability,'runStatus')).ownerHold,true);await assert.rejects(f.service.control(f.grant.capability,'advanceEpoch',1));
 });
 class Element{constructor(){this.children=[];this.listeners={};this.value='local';this.textContent='';this.disabled=false;this.hidden=false;}append(...v){this.children.push(...v);}replaceChildren(...v){this.children=[...v];}setAttribute(){}addEventListener(k,fn){this.listeners[k]=fn;}trigger(k){return this.listeners[k]?.({target:this});}}
+test('mounted browser comparison Start survives concurrent status refresh and completes two acknowledged placements',async t=>{
+ const oldFetch=globalThis.fetch,oldAdd=globalThis.addEventListener,pagehide=[];
+ globalThis.addEventListener=(name,fn)=>{if(name==='pagehide')pagehide.push(fn);};
+ let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})}),nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
+ globalThis.fetch=async(route,o={})=>{
+  if(route==='/decision/control'&&JSON.parse(o.body).action==='runStatus')await wait(20);
+  const response=await oldFetch(f.origin+route,{...o,headers:{origin:f.origin,...o.headers}});
+  if(route==='/decision/pair/register'&&response.ok){const challenge=await response.clone().json();await f.owner.command({action:'approve',challengeId:challenge.challengeId,...JSON.parse(o.body)});}
+  return response;
+ };
+ for(const [k,v]of Object.entries(DEFAULT_CONFIG))$('c-'+k).value=String(v);
+ $('c-pieceCap').value='2';
+ const mounted=mountComparison({getElementById:$,createElement:()=>new Element(),addEventListener(){},hidden:false},{window:{}});
+ try{
+  $('c-right').value='openai';await $('c-right').trigger('change');await $('decision-pairing').children[1].trigger('click');
+  assert.equal(calls,0);await $('c-start').trigger('click');await settle(()=>mounted.view.lanes[1].outcome);
+  assert.equal(mounted.view.lanes[1].error,null);assert.equal(mounted.view.lanes[1].pieces,2);assert.equal(calls,2);
+  assert.equal(f.store.snapshot().browserSession.ownerHold,false);
+  assert(Object.values(f.store.snapshot().requests).every(r=>r.status==='completed'&&!r.deliveryPending));
+  assert.equal(verifyDecisionUIRecord(mounted.exportRun()).ok,true);
+ }finally{mounted.dispose();await Promise.allSettled(pagehide.map(fn=>fn()));globalThis.fetch=oldFetch;if(oldAdd)globalThis.addEventListener=oldAdd;else delete globalThis.addEventListener;}
+});
 test('all three actual browser-provider exporters verify canonical receipts/nulls/privacy; Connect stays paused with persistent risk line; replay zero calls',async t=>{
  let calls=0;const f=await fixture(t,{httpServer:true,fetchImpl:upstream({inspect:()=>calls++})});const c=new Comparison({config:{right:'openai',pieceCap:2},providerFactory:(key,config)=>key==='openai'?f.bridge:providerFor(key,config)});await c.step();let json=c.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);assert.equal(JSON.parse(json).metadata.accounting[0].actualCostUSD,null);assert.match(providerProvenance(providerPolicy(f.bridge)),/^Owner-approved live OpenAI/);const before=calls;c.replay();c.pause();await c.step();assert.equal(calls,before);assert.equal(c.exportRun(),json);c.dispose();
  const g=await fixture(t,{httpServer:true});const v=new HumanVersus({providerFactory:()=>g.bridge});await v.stepAlgorithm();v.start();v.tick(20);v.input('drop');v.pause();await settle(()=>!v.view.busy);json=v.exportRun();assert.equal(verifyDecisionUIRecord(json).ok,true);v.dispose();
