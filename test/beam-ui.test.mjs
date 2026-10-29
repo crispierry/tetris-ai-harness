@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mountComparison} from '../public/comparison-ui.mjs';
 import {mountHarness} from '../public/harness-ui.mjs';
 import {mountVersus} from '../public/versus-ui.mjs';
-import {DEFAULT_CONFIG} from '../public/comparison.mjs';
+import {Comparison, DEFAULT_CONFIG, providerFor} from '../public/comparison.mjs';
 import {verifyDecisionUIRecord} from '../decision-record-verifier.mjs';
 class Element{
  constructor(){this.children=[];this.listeners={};this.value='';this.textContent='';this.disabled=false;this.hidden=false;this.parentNode={hidden:false};}
@@ -11,7 +11,12 @@ class Element{
 }
 function fixture(){const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};for(const[k,v]of Object.entries(DEFAULT_CONFIG))$('c-'+k).value=String(v);$('h-provider').value='lookahead';$('h-depth').value='2';$('v-provider').value='lookahead';$('v-depth').value='2';return {$,doc:{getElementById:$,createElement:()=>new Element(),addEventListener(){},hasFocus:()=>true,hidden:false},win:{addEventListener(){},requestAnimationFrame(){return 1;},cancelAnimationFrame(){}}};}
 test('comparison keeps each selected depth independent, locks it during play, and replays without changing its saved policy',async()=>{
- const {$,doc,win}=fixture(),c=mountComparison(doc,{window:win});
+ // This checks UI policy ownership, not search speed. The actual beam search
+ // and its deadlines are covered independently in beam-lookahead.test.mjs.
+ const {$,doc,win}=fixture(),c=mountComparison(doc,{window:win,comparisonFactory:options=>new Comparison({...options,providerFactory:(key,config)=>{
+  const policy=providerFor(key,config),fast=providerFor('local',config);
+  return {...policy,decide:fast.decide};
+ }})});
  try{
   $('c-leftDepth').value='6';await $('c-leftDepth').trigger('change');$('c-rightDepth').value='3';await $('c-rightDepth').trigger('change');
   assert.equal(c.view.lanes[0].policy.search.depth,6);assert.equal(c.view.lanes[1].policy.search.depth,3);assert.equal($('c-0-heading').textContent,'Lookahead · 6');assert.equal($('c-1-heading').textContent,'Lookahead · 3');
