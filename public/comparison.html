@@ -96,6 +96,16 @@
 </section>
 </div>
 <aside class="control-rail" aria-label="Comparison setup">
+<div class="play-toolbar">
+<label class="gravity-toggle" for="c-gravity" title="Keep falling while the computer thinks. Reset to change."><span>Gravity</span><input id="c-gravity" type="checkbox" role="switch" checked aria-describedby="c-gravity-help"></label>
+<div class="primary-actions">
+<button id="c-start" class="button button-primary">Start</button>
+<button id="c-pause" class="button button-secondary" disabled>Pause</button>
+<button id="c-step" class="button button-secondary" aria-label="Step one piece">Step</button>
+<button id="c-stop" class="button button-secondary" disabled>Stop</button>
+</div>
+<button id="c-reset" class="button button-quiet">Reset</button>
+</div>
 <div class="player-settings">
 <div class="player-choice"><label for="c-left">Left player</label>
 <select id="c-left"><option value="lookahead" selected>Lookahead</option>
@@ -109,16 +119,6 @@
 <option value="delay">Delayed mock</option>
 <option value="error">Error mock</option></select>
 <label class="depth-control" for="c-rightDepth">Depth<select id="c-rightDepth" aria-label="Right depth"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option></select></label></div>
-</div>
-<div class="play-toolbar">
-<label class="gravity-toggle" for="c-gravity" title="Keep falling while the computer thinks. Reset to change."><span>Gravity</span><input id="c-gravity" type="checkbox" role="switch" checked aria-describedby="c-gravity-help"></label>
-<div class="primary-actions">
-<button id="c-start" class="button button-primary">Start</button>
-<button id="c-pause" class="button button-secondary" disabled>Pause</button>
-<button id="c-step" class="button button-secondary" aria-label="Step one piece">Step</button>
-<button id="c-stop" class="button button-secondary" disabled>Stop</button>
-</div>
-<button id="c-reset" class="button button-quiet">Reset</button>
 </div>
 <p id="decision-cost" class="test-cost" hidden>
 </p>
