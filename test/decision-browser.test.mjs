@@ -394,10 +394,27 @@ test('the observed 49th-turn failure replays as a verifiable forced placement wi
  const forged=JSON.parse(record),first=forged.events.find(e=>e.input.kind==='gravity'&&e.input.selectedCandidateId);first.input.receipt={...first.input.receipt,...c.view.lastDecision.receipt,requestId:first.input.requestId,stateRevision:first.input.revision,selectedCandidateId:first.input.selectedCandidateId};assert.throws(()=>verifyDecisionUIRecord(JSON.stringify(forged)),/exactly one legal candidate/);
 });
 
-test('session expiry during an upstream request is not reported as a decision timeout',async t=>{
- const configuration=config();configuration.policy.expiresAt=Date.now()+1000;let release;
- const f=await fixture(t,{configuration,fetchImpl:upstream({hold:()=>new Promise(r=>release=r)})});
- try{await assert.rejects(f.service.decide(f.grant.capability,await packet()),{code:'session_expired'});const s=f.store.snapshot();assert.equal(s.browserSession.reason,'session_expired');assert.equal(Object.values(s.requests)[0].failure.public.code,'session_expired');assert.equal(s.used.attempts,1);}finally{release?.();await wait(0);}
+for(const boundary of [
+ {name:'session expiry during an upstream request is not reported as a decision timeout',deadline:1500,fireAt:999,code:'session_expired'},
+ {name:'an earlier decision deadline retains its reason when its callback arrives after session expiry',deadline:500,fireAt:1001,code:'decision_timeout'}
+])test(boundary.name,async t=>{
+ let now=Date.now();t.mock.method(Date,'now',()=>now);
+ const configuration=config();configuration.policy.expiresAt=now+1000;let release,entered,timer;
+ const ready=new Promise(r=>entered=r);
+ const f=await fixture(t,{configuration,fetchImpl:upstream({hold:()=>new Promise(r=>{release=r;entered();})})}),p={...await packet(),deadlineMs:boundary.deadline};
+ const actualTimeout=globalThis.setTimeout;
+ const timers=t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>{
+  assert.equal(ms,Math.min(1000,boundary.deadline));timer=()=>fn(...args);return actualTimeout(()=>{},60000);
+ });
+ try{
+  const work=f.service.decide(f.grant.capability,p);
+  await ready;
+  // Native timers can fire just before Date.now reaches the selected absolute
+  // expiry. Reproduce that boundary without sleeping or depending on host load.
+  now+=boundary.fireAt;timer();
+  await assert.rejects(work,{code:boundary.code});
+  const s=f.store.snapshot();assert.equal(s.browserSession.reason,boundary.code);assert.equal(Object.values(s.requests)[0].failure.public.code,boundary.code);assert.equal(s.used.attempts,1);
+ }finally{timers.mock.restore();release?.();await wait(0);}
 });
 
 for(const status of [400,503])test(`non-JSON HTTP ${status} preserves the HTTP failure instead of reporting invalid decision JSON`,async t=>{
