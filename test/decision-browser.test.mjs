@@ -74,7 +74,7 @@ test('new limits cannot be silently substituted into historical accounting or a 
  const c=extendedConfig();c.qualification.projectEvidence.thresholdAmountCents=100;c.policy.qualificationDigest=digest(c.qualification);assert.equal(qualifiedDecisionBrowser(c.qualification,c.policy),false);
  const f=await fixture(t),a=await f.bridge.status();assert.equal(validBrowserAccounting({...a,limits:{...a.limits,timeoutMs:10000}}),false);assert.equal(validBrowserAccounting({...a,attempts:1001,remainingAttempts:999}),false);
 });
-async function directory(t){const root=await mkdtemp(path.join(await realpath(os.tmpdir()),'browser-risk-dummy-'));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));return root;}
+async function directory(t,{cleanup=true}={}){const root=await mkdtemp(path.join(await realpath(os.tmpdir()),'browser-risk-dummy-'));await chmod(root,0o700);if(cleanup)t.after(()=>rm(root,{recursive:true,force:true}));return root;}
 test('owner-qualified $5 budget is authenticated, rendered and replayed without changing the $1 archive contract',async t=>{
  const configuration=config();configuration.qualification.projectEvidence.thresholdAmountCents=500;configuration.policy.qualificationDigest=digest(configuration.qualification);assert(qualifiedDecisionBrowser(configuration.qualification,configuration.policy));
  const f=await fixture(t,{configuration}),initial=await f.bridge.status();assert.equal(initial.version,'decision-browser-accounting-3');assert.equal(initial.spendControl.configuredProjectLimitUSD,5);assert(validBrowserAccounting(initial));assert.match(browserBudgetLine(initial.spendControl),/^\$5 monthly/);
@@ -87,11 +87,21 @@ test('$5 gravity accounting and receipts preserve canonical replay and independe
 });
 function upstream({status=200,usage={input_tokens:100,output_tokens:0,total_tokens:100},hold,inspect,refusal=false,errorCode='insufficient_quota'}={}){return async(url,options)=>{inspect?.(url,options);if(hold)await hold();const body=JSON.parse(options.body),ids=body.questions[0].choices.map(x=>x.value);return new Response(JSON.stringify(status===429?{error:{code:errorCode}}:{model:'gpt-6-luna',answers:[refusal?{name:'placement',type:'refusal'}:{name:'placement',type:'choice',choice:ids[0],confidence:1,probabilities:ids.map((value,n)=>({value,probability:n?0:1}))}],usage}),{status});};}
 async function fixture(t,{fetchImpl=upstream(),configuration=config(),httpServer=false}={}){
- const root=await directory(t),store=await openDecisionStore({directory:path.join(root,'ledger'),lineage:'dummy-browser',policy:configuration.policy,enroll:true}),service=await createDecisionBrowserService({store,...configuration,credential:dummy,fetchImpl});
- const grant=await service.owner.issueRun({laneId:'solo',controllerSessionBase:'browser'});grant.admission;const admitted={...grant,admission:await service.control(grant.capability,'runStatus')};let server,owner,origin;
+ const root=await directory(t,{cleanup:false});let store,service,bridge,server,owner,origin;
+ // Node stops later after-hooks if an earlier one fails. Close the resources
+ // before deleting their ledger so a cleanup failure cannot leave a server alive.
+ t.after(async()=>{
+  try{await bridge?.close().catch(()=>{});await owner?.close().catch(()=>{});await service?.close().catch(()=>{});}
+  finally{
+   if(server)await new Promise(resolve=>{server.close(resolve);server.closeAllConnections();});
+   await rm(root,{recursive:true,force:true});
+  }
+ });
+ store=await openDecisionStore({directory:path.join(root,'ledger'),lineage:'dummy-browser',policy:configuration.policy,enroll:true});service=await createDecisionBrowserService({store,...configuration,credential:dummy,fetchImpl});
+ const grant=await service.owner.issueRun({laneId:'solo',controllerSessionBase:'browser'});grant.admission;const admitted={...grant,admission:await service.control(grant.capability,'runStatus')};
  if(httpServer){owner=createDecisionOwner({service});server=http.createServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));const host=`127.0.0.1:${server.address().port}`;origin=`http://${host}`;server.on('request',createDecisionHandler({service,owner,host,origin}));}
  const fetchHTTP=httpServer?(route,options={})=>fetch(origin+route,{...options,headers:{origin,...options.headers}}):async(route,options)=>{const b=JSON.parse(options.body),cap=options.headers['x-decision-capability'];try{return new Response(JSON.stringify(route==='/decision/choice'?await service.decide(cap,b.packet,{signal:options.signal}):await service.control(cap,b.action,b.epoch,{requestId:b.requestId})));}catch(e){return new Response(JSON.stringify({error:e.code}),{status:400});}};
- const bridge=createDecisionBridge({grant:admitted,fetchImpl:fetchHTTP});t.after(async()=>{await bridge.close().catch(()=>{});await owner?.close().catch(()=>{});await service.close().catch(()=>{});if(server){server.closeAllConnections();await new Promise(r=>server.close(r));}});
+ bridge=createDecisionBridge({grant:admitted,fetchImpl:fetchHTTP});
  return {root,store,service,grant:admitted,bridge,owner,origin,fetchHTTP,...configuration};
 }
 async function packet(base='browser',epoch=0){let p;const c=new Controller({sessionId:base,gameEpoch:epoch,provider:{...heuristic(),async decide(x){p=x;throw new Error('capture');}}});await c.step();return p;}
