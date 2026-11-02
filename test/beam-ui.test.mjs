@@ -26,7 +26,11 @@ test('comparison keeps each selected depth independent, locks it during play, an
   $('c-right').value='openai';await $('c-right').trigger('change');assert.equal($('c-rightDepth').parentNode.hidden,true);assert.equal($('c-rightDepth').disabled,true);assert.equal($('c-leftDepth').parentNode.hidden,false);assert.equal($('c-start').disabled,true);
  }finally{c.dispose();}
 });
-test('solo computer selects depth6, exports canonical search receipts, and unlocks depth after Reset',async()=>{
+test('solo computer selects depth6, exports canonical search receipts, and unlocks depth after Reset',async t=>{
+ // Exercise the real bounded search and exported receipt, with a deterministic
+ // clock: CPU contention must not turn this UI ownership check into a timeout.
+ // Search deadline/cancellation behavior has separate beam-lookahead coverage.
+ t.mock.method(performance,'now',()=>0);
  const {$,doc,win}=fixture(),h=mountHarness(doc,{window:win});
  try{
   assert.equal(h.controller.view.player.name,'Local lookahead depth 2');$('h-depth').value='6';await $('h-depth').trigger('change');assert.equal($('player-heading').textContent,'Lookahead · 6');
@@ -34,7 +38,8 @@ test('solo computer selects depth6, exports canonical search receipts, and unloc
   await $('h-reset').trigger('click');assert.equal($('h-depth').disabled,false);$('h-depth').value='3';await $('h-depth').trigger('change');await $('h-step').trigger('click');assert.equal(h.controller.view.pieces,1);assert.equal(JSON.parse(h.exportRun()).lanes[0].policy.search.depth,3);
  }finally{h.dispose();}
 });
-test('human versus computer applies depth choices while preserving the human board',async()=>{
+test('human versus computer applies depth choices while preserving the human board',async t=>{
+ t.mock.method(performance,'now',()=>0);
  const {$,doc,win}=fixture(),v=mountVersus(doc,{window:win});
  try{
   $('v-depth').value='5';await $('v-depth').trigger('change');assert.equal($('v-1-heading').textContent,'Lookahead · 5');assert.equal(v.runner.view.policies[1].search.depth,5);
